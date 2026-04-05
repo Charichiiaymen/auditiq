@@ -53,18 +53,31 @@ Return ONLY a valid JSON array with no explanation, no markdown, no backticks. U
 ]`;
 
   try {
-const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434'
-const response = await axios.post(`${ollamaUrl}/api/chat`, {
-  model: 'qwen3.5:cloud',
-  messages: [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: userPrompt },
-  ],
-  stream: false,
-  options: {
-    temperature: 0.4,
-  },
-});
+    console.log('OLLAMA_API_KEY present:', !!process.env.OLLAMA_API_KEY)
+    console.log('Using cloud:', !!process.env.OLLAMA_API_KEY)
+
+    const apiUrl = process.env.OLLAMA_API_KEY
+      ? 'https://ollama.com/api/chat'
+      : 'http://localhost:11434/api/chat'
+
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(process.env.OLLAMA_API_KEY && {
+        'Authorization': `Bearer ${process.env.OLLAMA_API_KEY}`
+      })
+    }
+
+    const response = await axios.post(apiUrl, {
+      model: 'qwen3.5:cloud',
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userPrompt },
+      ],
+      stream: false,
+      options: {
+        temperature: 0.4,
+      },
+    }, { headers })
 
     const responseText = response.data.message.content;
 
