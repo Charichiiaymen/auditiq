@@ -17,20 +17,8 @@ function HomePage() {
       setError('Please enter a valid URL starting with http:// or https://')
       return
     }
-    setLoading(true)
-    try {
-      const response = await axios.post('http://localhost:5000/api/audit', {
-        url,
-        instagram,
-        facebook,
-      })
-      localStorage.setItem('auditResult', JSON.stringify(response.data))
-      navigate('/report')
-    } catch (err) {
-      setError(err?.response?.data?.error || 'Audit failed. Please try again.')
-    } finally {
-      setLoading(false)
-    }
+    localStorage.setItem('auditPending', JSON.stringify({ url, instagram, facebook }))
+    navigate('/loading')
   }
 
   return (
