@@ -53,7 +53,8 @@ Return ONLY a valid JSON array with no explanation, no markdown, no backticks. U
 ]`;
 
   try {
-const response = await axios.post('http://localhost:11434/api/chat', {
+const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434'
+const response = await axios.post(`${ollamaUrl}/api/chat`, {
   model: 'qwen3.5:cloud',
   messages: [
     { role: 'system', content: SYSTEM_PROMPT },
