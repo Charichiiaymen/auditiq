@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Tooltip } from 'recharts'
 import Navbar from '../components/Navbar'
 import jsPDF from 'jspdf'
-import html2canvas from 'html2canvas'
 
 const priorityColor = {
   High: 'bg-red-500/20 text-red-400 border border-red-500/30',
@@ -51,225 +50,139 @@ function ReportPage() {
     { name: 'Social Presence', score: result.social.score },
   ]
 
-  async function handleExportPDF() {
+async function handleExportPDF() {
     setExporting(true)
     try {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
       const W = 210
-      const margin = 16
-      const col = W - margin * 2
+      const M = 16
+      const col = W - M * 2
       let y = 20
 
-      // ── Helper functions ──────────────────────────────────────
-      function setColor(hex) {
-        const r = parseInt(hex.slice(1, 3), 16)
-        const g = parseInt(hex.slice(3, 5), 16)
-        const b = parseInt(hex.slice(5, 7), 16)
-        pdf.setTextColor(r, g, b)
+      const rgb = (hex) => [parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)]
+      const tc = (hex) => { const [r,g,b] = rgb(hex); pdf.setTextColor(r,g,b) }
+      const fc = (hex) => { const [r,g,b] = rgb(hex); pdf.setFillColor(r,g,b) }
+      const dc = (hex) => { const [r,g,b] = rgb(hex); pdf.setDrawColor(r,g,b) }
+      const darkBg = () => { fc('#0f172a'); dc('#0f172a'); pdf.rect(0,0,210,297,'FD') }
+      const newPage = (needed = 20) => {
+        if (y + needed > 278) { pdf.addPage(); darkBg(); y = 20 }
       }
-      function setFill(hex) {
-        const r = parseInt(hex.slice(1, 3), 16)
-        const g = parseInt(hex.slice(3, 5), 16)
-        const b = parseInt(hex.slice(5, 7), 16)
-        pdf.setFillColor(r, g, b)
-      }
-      function setDraw(hex) {
-        const r = parseInt(hex.slice(1, 3), 16)
-        const g = parseInt(hex.slice(3, 5), 16)
-        const b = parseInt(hex.slice(5, 7), 16)
-        pdf.setDrawColor(r, g, b)
-      }
-      function newPageIfNeeded(needed = 20) {
-        if (y + needed > 280) {
-          pdf.addPage()
-          setFill('#0f172a')
-          setDraw('#0f172a')
-          pdf.rect(0, 0, 210, 297, 'FD')
-          y = 20
-        }
-      }
+      const scoreColor = (s) => s >= 75 ? '#4ade80' : s >= 50 ? '#facc15' : '#f87171'
+      const scoreLabel = (s) => s >= 75 ? 'Good' : s >= 50 ? 'Needs Improvement' : 'Critical'
 
-      // ── Background ────────────────────────────────────────────
-      setFill('#0f172a')
-      pdf.rect(0, 0, 210, 297, 'F')
+      darkBg()
 
-      // ── Header ────────────────────────────────────────────────
-      pdf.setFontSize(22)
-      pdf.setFont('helvetica', 'bold')
-      setColor('#818cf8')
-      pdf.text('AuditIQ', margin, y)
-      pdf.setFontSize(10)
-      pdf.setFont('helvetica', 'normal')
-      setColor('#94a3b8')
-      pdf.text('Digital Marketing Audit Report', margin, y + 7)
-      y += 18
+      pdf.setFontSize(24); pdf.setFont('helvetica','bold'); tc('#6366f1')
+      pdf.text('AuditIQ', M, y)
+      pdf.setFontSize(9); pdf.setFont('helvetica','normal'); tc('#94a3b8')
+      pdf.text('AI-Powered Digital Marketing Audit Report', M, y+7)
+      y += 16
 
-      // URL + timestamp
-      pdf.setFontSize(9)
-      setColor('#64748b')
-      pdf.text(`URL: ${result.url}`, margin, y)
-      pdf.text(`Date: ${new Date(result.timestamp).toLocaleString()}`, margin, y + 5)
-      y += 14
+      pdf.setFontSize(8); tc('#64748b')
+      pdf.text(`URL: ${result.url}`, M, y); y += 5
+      pdf.text(`Date: ${new Date(result.timestamp).toLocaleString()}`, M, y); y += 8
 
-      // ── Divider ───────────────────────────────────────────────
-      setDraw('#334155')
-      pdf.setLineWidth(0.3)
-      pdf.line(margin, y, W - margin, y)
-      y += 8
+      dc('#334155'); pdf.setLineWidth(0.3); pdf.line(M, y, W-M, y); y += 8
 
-      // ── Overall Score ─────────────────────────────────────────
-      pdf.setFontSize(11)
-      pdf.setFont('helvetica', 'bold')
-      setColor('#ffffff')
-      pdf.text('Overall Score', margin, y)
-      y += 7
-      setFill('#1e293b')
-      setDraw('#334155')
-      pdf.roundedRect(margin, y, col, 18, 2, 2, 'FD')
-      pdf.setFontSize(20)
-      setColor('#818cf8')
-      pdf.text(`${overallScore}/100`, W / 2, y + 12, { align: 'center' })
-      y += 26
+      fc('#1e293b'); dc('#334155')
+      pdf.roundedRect(M, y, col, 22, 2, 2, 'FD')
+      pdf.setFontSize(9); pdf.setFont('helvetica','normal'); tc('#94a3b8')
+      pdf.text('Overall Score', W/2, y+6, { align: 'center' })
+      pdf.setFontSize(22); pdf.setFont('helvetica','bold'); tc('#6366f1')
+      pdf.text(`${overallScore}/100`, W/2, y+18, { align: 'center' })
+      y += 30
 
-      // ── Pillar Scores ─────────────────────────────────────────
-      pdf.setFontSize(11)
-      pdf.setFont('helvetica', 'bold')
-      setColor('#ffffff')
-      pdf.text('Score Breakdown', margin, y)
-      y += 6
+      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
+      pdf.text('Score Breakdown', M, y); y += 6
 
-      const cardW = (col - 6) / 2
-      const pillarRows = [
-        [{ name: 'SEO Health', score: result.seo.score }, { name: 'Technical', score: result.technical.score }],
-        [{ name: 'Content Quality', score: result.content.score }, { name: 'Social Presence', score: result.social.score }],
+      const cardW = (col - 5) / 2
+      const cardData = [
+        { name: 'SEO Health', score: result.seo.score },
+        { name: 'Technical', score: result.technical.score },
+        { name: 'Content Quality', score: result.content.score },
+        { name: 'Social Presence', score: result.social.score },
       ]
 
-      function statusColor(score) {
-        if (score >= 75) return '#4ade80'
-        if (score >= 50) return '#facc15'
-        return '#f87171'
-      }
-      function statusText(score) {
-        if (score >= 75) return 'Good'
-        if (score >= 50) return 'Needs Improvement'
-        return 'Critical'
-      }
-
-      pillarRows.forEach((row) => {
-        newPageIfNeeded(24)
-        row.forEach((p, i) => {
-          const x = margin + i * (cardW + 6)
-          setFill('#1e293b')
-          setDraw('#334155')
+      for (let row = 0; row < 2; row++) {
+        newPage(24)
+        for (let col2 = 0; col2 < 2; col2++) {
+          const p = cardData[row * 2 + col2]
+          const x = M + col2 * (cardW + 5)
+          fc('#1e293b'); dc('#334155')
           pdf.roundedRect(x, y, cardW, 20, 2, 2, 'FD')
-          pdf.setFontSize(8)
-          pdf.setFont('helvetica', 'bold')
-          setColor('#94a3b8')
-          pdf.text(p.name, x + 3, y + 6)
-          pdf.setFontSize(14)
-          pdf.setFont('helvetica', 'bold')
-          setColor('#ffffff')
-          pdf.text(`${p.score}/100`, x + 3, y + 13)
-          setColor(statusColor(p.score))
+          pdf.setFontSize(7); pdf.setFont('helvetica','normal'); tc('#94a3b8')
+          pdf.text(p.name, x+4, y+6)
+          pdf.setFontSize(15); pdf.setFont('helvetica','bold'); tc('#ffffff')
+          pdf.text(`${p.score}`, x+4, y+15)
           pdf.setFontSize(7)
-          pdf.text(statusText(p.score), x + cardW - 3, y + 13, { align: 'right' })
-        })
-        y += 26
-      })
-
-      // ── Score Overview Bars ───────────────────────────────────
-      newPageIfNeeded(80)
-      pdf.setFontSize(11)
-      pdf.setFont('helvetica', 'bold')
-      pdf.setTextColor(255, 255, 255)
-      pdf.text('Score Overview', margin, y)
-      y += 7
-
-      const cardH2 = pillars.length * 16 + 10
-      pdf.setFillColor(30, 41, 59)
-      pdf.setDrawColor(51, 65, 85)
-      pdf.setLineWidth(0.3)
-      pdf.rect(margin, y, col, cardH2, 'FD')
-
-      let barY2 = y + 10
-
-      pillars.forEach((p) => {
-        const labelW2 = 32
-        const scoreW2 = 18
-        const trackW2 = col - labelW2 - scoreW2 - 12
-        const trackX2 = margin + 4 + labelW2
-
-        pdf.setFontSize(8)
-        pdf.setFont('helvetica', 'normal')
-        pdf.setTextColor(148, 163, 184)
-        pdf.text(p.name, margin + 4, barY2 + 4.5)
-
-        pdf.setFillColor(15, 23, 42)
-        pdf.setDrawColor(15, 23, 42)
-        pdf.rect(trackX2, barY2, trackW2, 6, 'FD')
-
-        if (p.score > 0) {
-          const fillW2 = (p.score / 100) * trackW2
-          const c = p.score >= 75 ? [74, 222, 128] : p.score >= 50 ? [250, 204, 21] : [248, 113, 113]
-          pdf.setFillColor(c[0], c[1], c[2])
-          pdf.setDrawColor(c[0], c[1], c[2])
-          pdf.rect(trackX2, barY2, fillW2, 6, 'FD')
+          const [r,g,b] = rgb(scoreColor(p.score)); pdf.setTextColor(r,g,b)
+          pdf.text(scoreLabel(p.score), x+cardW-3, y+15, { align: 'right' })
         }
+        y += 24
+      }
 
-        pdf.setFontSize(8)
-        pdf.setFont('helvetica', 'bold')
-        pdf.setTextColor(255, 255, 255)
-        pdf.text(`${p.score}/100`, trackX2 + trackW2 + 3, barY2 + 4.5)
+      y += 4
+      newPage(80)
+      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
+      pdf.text('Score Overview', M, y); y += 6
 
-        barY2 += 16
+      const barCardH = cardData.length * 15 + 10
+      fc('#1e293b'); dc('#334155'); pdf.setLineWidth(0.3)
+      pdf.rect(M, y, col, barCardH, 'FD')
+
+      const labelW = 30
+      const scoreW = 18
+      const trackW = col - labelW - scoreW - 10
+      const trackX = M + 5 + labelW
+      let barY = y + 9
+
+      cardData.forEach((p) => {
+        pdf.setFontSize(8); pdf.setFont('helvetica','normal'); tc('#94a3b8')
+        pdf.text(p.name, M+4, barY+4)
+        fc('#0f172a'); dc('#0f172a')
+        pdf.rect(trackX, barY, trackW, 5, 'FD')
+        if (p.score > 0) {
+          const fw = (p.score / 100) * trackW
+          const [r,g,b] = rgb(scoreColor(p.score))
+          pdf.setFillColor(r,g,b); pdf.setDrawColor(r,g,b)
+          pdf.rect(trackX, barY, fw, 5, 'FD')
+        }
+        pdf.setFontSize(8); pdf.setFont('helvetica','bold'); tc('#ffffff')
+        pdf.text(`${p.score}/100`, trackX+trackW+3, barY+4)
+        barY += 15
       })
 
-      y += cardH2 + 8
+      y += barCardH + 8
 
-      // ── Recommendations ────────────────────────────────────────
-      newPageIfNeeded(20)
-      pdf.setFontSize(11)
-      pdf.setFont('helvetica', 'bold')
-      setColor('#ffffff')
-      pdf.text('Recommendations', margin, y)
-      y += 8
+      newPage(20)
+      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
+      pdf.text('Recommendations', M, y); y += 7
 
-      result.recommendations.forEach((rec, i) => {
-        newPageIfNeeded(30)
-        setFill('#1e293b')
-        setDraw('#334155')
-        pdf.roundedRect(margin, y, col, 26, 2, 2, 'FD')
+      const priorityColors = { High: '#f87171', Medium: '#facc15', Low: '#4ade80' }
 
-        // Priority badge
-        const priorityColors = { High: '#f87171', Medium: '#facc15', Low: '#4ade80' }
-        setColor(priorityColors[rec.priority])
-        pdf.setFontSize(7)
-        pdf.setFont('helvetica', 'bold')
-        const priorityX = margin + 3
-        pdf.text(rec.priority, priorityX, y + 6)
-
-        // Pillar badge
-        setColor('#94a3b8')
-        pdf.setFontSize(7)
-        pdf.setFont('helvetica', 'normal')
-        const pillarX = priorityX + pdf.getTextWidth(rec.priority) + 4
-        pdf.text(rec.pillar, pillarX, y + 6)
-
-        // Title
-        setColor('#ffffff')
-        pdf.setFontSize(9)
-        pdf.setFont('helvetica', 'bold')
-        pdf.text(rec.title, margin + 3, y + 14)
-
-        // Description
-        setColor('#94a3b8')
-        pdf.setFontSize(8)
-        pdf.setFont('helvetica', 'normal')
-        const descLines = pdf.splitTextToSize(rec.description, col - 6)
-        pdf.text(descLines, margin + 3, y + 20)
-
-        y += 32
+      result.recommendations.forEach((rec) => {
+        const lines = pdf.splitTextToSize(rec.description, col - 8)
+        const recH = 8 + 7 + lines.length * 4.5 + 5
+        newPage(recH + 4)
+        fc('#1e293b'); dc('#334155'); pdf.setLineWidth(0.3)
+        pdf.roundedRect(M, y, col, recH, 2, 2, 'FD')
+        const [pr,pg,pb] = rgb(priorityColors[rec.priority] || '#94a3b8')
+        pdf.setTextColor(pr,pg,pb)
+        pdf.setFontSize(7); pdf.setFont('helvetica','bold')
+        pdf.text(rec.priority, M+4, y+6)
+        tc('#64748b'); pdf.setFont('helvetica','normal')
+        pdf.text(`· ${rec.pillar}`, M+4+pdf.getTextWidth(rec.priority)+2, y+6)
+        tc('#ffffff'); pdf.setFontSize(9); pdf.setFont('helvetica','bold')
+        pdf.text(rec.title, M+4, y+13)
+        tc('#94a3b8'); pdf.setFontSize(7.5); pdf.setFont('helvetica','normal')
+        pdf.text(lines, M+4, y+19)
+        y += recH + 4
       })
+
+      newPage(12); y += 4
+      dc('#334155'); pdf.line(M, y, W-M, y); y += 5
+      tc('#475569'); pdf.setFontSize(7)
+      pdf.text('Generated by AuditIQ — AI-Powered Digital Marketing Audit', W/2, y, { align: 'center' })
 
       pdf.save('AuditIQ-Report.pdf')
     } catch (err) {
@@ -278,7 +191,6 @@ function ReportPage() {
       setExporting(false)
     }
   }
-
   return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col">
       <Navbar />
