@@ -177,69 +177,54 @@ function ReportPage() {
         y += 26
       })
 
-      // ── Radar Chart ───────────────────────────────────────────
+      // ── Score Overview Bars ───────────────────────────────────
       newPageIfNeeded(80)
       pdf.setFontSize(11)
       pdf.setFont('helvetica', 'bold')
-      setColor('#ffffff')
+      pdf.setTextColor(255, 255, 255)
       pdf.text('Score Overview', margin, y)
-      y += 6
+      y += 7
 
-      // Chart area (100x100)
-      setFill('#1e293b')
-      setDraw('#334155')
-      pdf.roundedRect(margin, y, 100, 100, 2, 2, 'FD')
+      const cardH2 = pillarsData.length * 16 + 10
+      pdf.setFillColor(30, 41, 59)
+      pdf.setDrawColor(51, 65, 85)
+      pdf.setLineWidth(0.3)
+      pdf.rect(margin, y, col, cardH2, 'FD')
 
-      // Axes and labels
-      setColor('#64748b')
-      pdf.setFontSize(6)
-      const centerX = margin + 50
-      const centerY = y + 50
-      const axes = [
-        { angle: 0, label: 'SEO', dx: 0, dy: -55 },
-        { angle: 90, label: 'Technical', dx: 55, dy: 0 },
-        { angle: 180, label: 'Content', dx: 0, dy: 55 },
-        { angle: 270, label: 'Social', dx: -55, dy: 0 },
-      ]
-      axes.forEach(({ angle, label, dx, dy }) => {
-        const rad = (angle * Math.PI) / 180
-        const x = centerX + 40 * Math.cos(rad)
-        const y = centerY + 40 * Math.sin(rad)
-        pdf.text(label, x + dx, y + dy, { align: 'center' })
-      })
+      let barY2 = y + 10
 
-      // Data points
-      const points = radarData.map((d) => {
-        const angle = (d.pillar === 'SEO' ? 0 : d.pillar === 'Technical' ? 90 : d.pillar === 'Content' ? 180 : 270)
-        const rad = (angle * Math.PI) / 180
-        const dist = (d.score / 100) * 40
-        return {
-          x: centerX + dist * Math.cos(rad),
-          y: centerY + dist * Math.sin(rad),
+      pillarsData.forEach((p) => {
+        const labelW2 = 32
+        const scoreW2 = 18
+        const trackW2 = col - labelW2 - scoreW2 - 12
+        const trackX2 = margin + 4 + labelW2
+
+        pdf.setFontSize(8)
+        pdf.setFont('helvetica', 'normal')
+        pdf.setTextColor(148, 163, 184)
+        pdf.text(p.name, margin + 4, barY2 + 4.5)
+
+        pdf.setFillColor(15, 23, 42)
+        pdf.setDrawColor(15, 23, 42)
+        pdf.rect(trackX2, barY2, trackW2, 6, 'FD')
+
+        if (p.score > 0) {
+          const fillW2 = (p.score / 100) * trackW2
+          const c = p.score >= 75 ? [74, 222, 128] : p.score >= 50 ? [250, 204, 21] : [248, 113, 113]
+          pdf.setFillColor(c[0], c[1], c[2])
+          pdf.setDrawColor(c[0], c[1], c[2])
+          pdf.rect(trackX2, barY2, fillW2, 6, 'FD')
         }
+
+        pdf.setFontSize(8)
+        pdf.setFont('helvetica', 'bold')
+        pdf.setTextColor(255, 255, 255)
+        pdf.text(`${p.score}/100`, trackX2 + trackW2 + 3, barY2 + 4.5)
+
+        barY2 += 16
       })
 
-      // Connect points
-      setColor('#818cf8')
-      pdf.setLineWidth(0.5)
-      pdf.setFillColor(129, 140, 248, 77) // indigo with alpha
-      if (points.length > 0) {
-        pdf.lines(
-          points.map((p, i) => [p.x - (i === 0 ? centerX + 40 : points[i - 1].x), p.y - (i === 0 ? centerY : points[i - 1].y)]),
-          points[0].x,
-          points[0].y,
-          [1, 1],
-          'FD'
-        )
-      }
-
-      // Point markers
-      setColor('#818cf8')
-      points.forEach((p) => {
-        pdf.circle(p.x, p.y, 1.5, 'F')
-      })
-
-      y += 110
+      y += cardH2 + 8
 
       // ── Recommendations ────────────────────────────────────────
       newPageIfNeeded(20)
