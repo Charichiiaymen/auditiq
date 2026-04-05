@@ -185,7 +185,7 @@ function ReportPage() {
       pdf.text('Score Overview', margin, y)
       y += 7
 
-      const cardH2 = pillarsData.length * 16 + 10
+      const cardH2 = pillars.length * 16 + 10
       pdf.setFillColor(30, 41, 59)
       pdf.setDrawColor(51, 65, 85)
       pdf.setLineWidth(0.3)
@@ -193,7 +193,7 @@ function ReportPage() {
 
       let barY2 = y + 10
 
-      pillarsData.forEach((p) => {
+      pillars.forEach((p) => {
         const labelW2 = 32
         const scoreW2 = 18
         const trackW2 = col - labelW2 - scoreW2 - 12
