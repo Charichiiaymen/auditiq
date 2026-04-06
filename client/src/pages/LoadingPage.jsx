@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { sanitizeErrorMessage, getUserFriendlyErrorMessage, sanitizeUserData } from '../utils/errorUtils'
 
 const steps = [
   'Fetching website content...',
@@ -13,7 +14,6 @@ const steps = [
 function LoadingPage() {
   const navigate = useNavigate()
   const [currentStep, setCurrentStep] = useState(0)
-  const [error, setError] = useState('')
 
   useEffect(() => {
     const pending = localStorage.getItem('auditPending')
@@ -37,30 +37,50 @@ function LoadingPage() {
         clearInterval(interval)
         setCurrentStep(steps.length - 1)
         localStorage.removeItem('auditPending')
-        localStorage.setItem('auditResult', JSON.stringify(response.data))
+        // Sanitize data before storing in localStorage
+        const sanitizedData = sanitizeUserData(response.data)
+        localStorage.setItem('auditResult', JSON.stringify(sanitizedData))
         setTimeout(() => navigate('/report'), 800)
       })
       .catch((err) => {
         clearInterval(interval)
-        setError(err?.response?.data?.error || 'Audit failed. Please try again.')
+        // Redirect to error page with detailed error details
+        let errorMessage = 'Audit failed. Please try again.'
+        let errorStatus = 'Audit Failed'
+
+        // Handle different types of errors
+        if (err.response) {
+          // Server responded with error status
+          const status = err.response.status
+          errorStatus = `Audit Failed (${status})`
+
+          // Use user-friendly error messages for common HTTP status codes
+          errorMessage = getUserFriendlyErrorMessage(status, err.response.data?.error)
+
+          // Sanitize any backend error messages
+          errorMessage = sanitizeErrorMessage(errorMessage)
+        } else if (err.request) {
+          // Network error (no response received)
+          errorMessage = 'Network error. Please check your internet connection and try again.'
+          errorStatus = 'Connection Failed'
+        } else {
+          // Something else happened
+          errorMessage = err.message || 'An unexpected error occurred. Please try again.'
+          errorStatus = 'Unexpected Error'
+          // Sanitize any error messages
+          errorMessage = sanitizeErrorMessage(errorMessage)
+        }
+
+        navigate('/error', {
+          state: {
+            message: errorMessage,
+            status: errorStatus
+          }
+        })
       })
 
     return () => clearInterval(interval)
   }, [navigate])
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center px-4 gap-6">
-        <p className="text-red-400 text-sm">{error}</p>
-        <button
-          onClick={() => navigate('/')}
-          className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm"
-        >
-          Try Again
-        </button>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center px-4">

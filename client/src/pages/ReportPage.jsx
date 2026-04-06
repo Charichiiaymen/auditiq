@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Tooltip } from 'recharts'
 import Navbar from '../components/Navbar'
 import jsPDF from 'jspdf'
+import { sanitizeUserData } from '../utils/errorUtils'
 
 const priorityColor = {
   High: 'bg-red-500/20 text-red-400 border border-red-500/30',
@@ -27,7 +28,10 @@ function ReportPage() {
       navigate('/')
       return
     }
-    setResult(JSON.parse(stored))
+    // Sanitize data when retrieving from localStorage
+    const parsedData = JSON.parse(stored)
+    const sanitizedData = sanitizeUserData(parsedData)
+    setResult(sanitizedData)
   }, [navigate])
 
   if (!result) return null

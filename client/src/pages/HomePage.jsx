@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import Navbar from '../components/Navbar'
+import { sanitizeUserData } from '../utils/errorUtils'
 
 function HomePage() {
   const navigate = useNavigate()
@@ -17,7 +18,10 @@ function HomePage() {
       setError('Please enter a valid URL starting with http:// or https://')
       return
     }
-    localStorage.setItem('auditPending', JSON.stringify({ url, instagram, facebook }))
+
+    // Sanitize user data before storing in localStorage
+    const sanitizedData = sanitizeUserData({ url, instagram, facebook })
+    localStorage.setItem('auditPending', JSON.stringify(sanitizedData))
     navigate('/loading')
   }
 
