@@ -3,6 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { generateRecommendations } = require('../services/aiRecommender');
 const { getPageSpeedData } = require('../services/pageSpeed');
+const { crawlSite } = require('../services/multiPageCrawler');
 
 const router = express.Router();
 
@@ -747,14 +748,16 @@ router.post('/audit', async (req, res) => {
       social: { ...socialData, score: socialScore },
     };
 
-    const [recommendations, pageSpeed] = await Promise.all([
+    const [recommendations, pageSpeed, crawlData] = await Promise.all([
       generateRecommendations(result),
       getPageSpeedData(url),
+      crawlSite(url, html),
     ]);
     const issues = triageIssues(seoData, techData, contentData, socialData);
     result.recommendations = recommendations;
     result.issues = issues;
     result.pageSpeed = pageSpeed;
+    result.crawl = crawlData;
 
     return res.json(result);
   } catch (err) {
