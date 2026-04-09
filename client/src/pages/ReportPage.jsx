@@ -67,6 +67,100 @@ function Card({ children, className = '' }) {
   )
 }
 
+function PriorityMatrix({ issues }) {
+  const filtered = issues.filter(i => i.severity !== 'Informational' && i.effort && i.impact)
+
+  const effortX = { 'Quick Win': 20, 'Medium': 50, 'Complex': 80 }
+  const impactY = { 'Low': 80, 'Medium': 50, 'High': 20 }
+  const severityColor = {
+    Critical: '#f87171',
+    High: '#fb923c',
+    Medium: '#facc15',
+    Low: '#4ade80',
+  }
+
+  const quadrants = [
+    { x: 0, y: 0, w: 50, h: 50, label: 'High Impact\nEasy Wins', color: 'rgba(99,102,241,0.08)', labelColor: '#818cf8' },
+    { x: 50, y: 0, w: 50, h: 50, label: 'High Impact\nHard Wins', color: 'rgba(251,146,60,0.05)', labelColor: '#fb923c' },
+    { x: 0, y: 50, w: 50, h: 50, label: 'Low Impact\nEasy Wins', color: 'rgba(74,222,128,0.05)', labelColor: '#4ade80' },
+    { x: 50, y: 50, w: 50, h: 50, label: 'Low Impact\nHard Wins', color: 'rgba(100,116,139,0.05)', labelColor: '#475569' },
+  ]
+
+  return (
+    <Card className="p-5">
+      <p className="text-slate-400 text-xs mb-4">Each dot represents an issue. Top-left = highest priority fixes.</p>
+      <div className="relative w-full" style={{ paddingBottom: '60%' }}>
+        <svg viewBox="0 0 120 100" className="absolute inset-0 w-full h-full" preserveAspectRatio="xMidYMid meet">
+          {/* Quadrant backgrounds */}
+          {quadrants.map((q, i) => (
+            <rect key={i} x={q.x + 10} y={q.y + 5} width={q.w} height={q.h} fill={q.color} />
+          ))}
+
+          {/* Grid lines */}
+          <line x1="60" y1="5" x2="60" y2="105" stroke="#334155" strokeWidth="0.3" strokeDasharray="1,1" />
+          <line x1="10" y1="55" x2="110" y2="55" stroke="#334155" strokeWidth="0.3" strokeDasharray="1,1" />
+
+          {/* Axes */}
+          <line x1="10" y1="5" x2="10" y2="105" stroke="#475569" strokeWidth="0.4" />
+          <line x1="10" y1="105" x2="110" y2="105" stroke="#475569" strokeWidth="0.4" />
+
+          {/* Axis Labels */}
+          <text x="60" y="113" textAnchor="middle" fill="#64748b" fontSize="4">Effort →</text>
+          <text x="2" y="55" textAnchor="middle" fill="#64748b" fontSize="3.5" transform="rotate(-90 2 55)">Impact ↑</text>
+
+          {/* X axis ticks */}
+          {['Quick Win', 'Medium', 'Complex'].map((label, i) => (
+            <text key={label} x={10 + (i+0.5)*33.3} y="109" textAnchor="middle" fill="#475569" fontSize="3">{label}</text>
+          ))}
+
+          {/* Y axis ticks */}
+          {['High', 'Medium', 'Low'].map((label, i) => (
+            <text key={label} x="9.5" y={5 + (i+0.5)*33.3 + 1} textAnchor="end" fill="#475569" fontSize="2.8">{label}</text>
+          ))}
+
+          {/* Quadrant labels */}
+          <text x="35" y="14" textAnchor="middle" fill="#818cf8" fontSize="3" fontWeight="bold">⚡ Quick Wins</text>
+          <text x="85" y="14" textAnchor="middle" fill="#fb923c" fontSize="3" fontWeight="bold">🎯 Strategic</text>
+          <text x="35" y="64" textAnchor="middle" fill="#4ade80" fontSize="3" fontWeight="bold">📋 Nice to Have</text>
+          <text x="85" y="64" textAnchor="middle" fill="#475569" fontSize="3" fontWeight="bold">⏸ Defer</text>
+
+          {/* Issue dots */}
+          {filtered.map((issue, i) => {
+            const cx = 10 + (effortX[issue.effort] || 50)
+            const cy = 5 + (impactY[issue.impact] || 50)
+            const jitterX = ((i * 7) % 14) - 7
+            const jitterY = ((i * 11) % 14) - 7
+            const color = severityColor[issue.severity] || '#94a3b8'
+            return (
+              <g key={i}>
+                <circle
+                  cx={cx + jitterX * 0.3}
+                  cy={cy + jitterY * 0.3}
+                  r="2.5"
+                  fill={color}
+                  fillOpacity="0.85"
+                  stroke="#0f172a"
+                  strokeWidth="0.5"
+                />
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+
+      {/* Legend */}
+      <div className="flex flex-wrap gap-3 mt-3">
+        {Object.entries(severityColor).map(([label, color]) => (
+          <div key={label} className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+            <span className="text-slate-400 text-xs">{label}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 export default function ReportPage() {
   const navigate = useNavigate()
   const [result, setResult] = useState(null)
@@ -106,207 +200,453 @@ export default function ReportPage() {
   const scoreLabel = (s) => s >= 75 ? 'Good' : s >= 50 ? 'Needs Improvement' : 'Critical'
   const scoreCls = (s) => s >= 75 ? 'text-green-400' : s >= 50 ? 'text-yellow-400' : 'text-red-400'
 
-  // ── PDF Export ─────────────────────────────────────────────
-  async function handleExportPDF() {
+async function handleExportPDF() {
     setExporting(true)
     try {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-      const W = 210
-      const M = 16
-      const col = W - M * 2
-      let y = 20
-
+      const W = 210; const M = 16; const col = W - M * 2; let y = 20
       const rgb = (hex) => [parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)]
       const tc = (hex) => { const [r,g,b] = rgb(hex); pdf.setTextColor(r,g,b) }
       const fc = (hex) => { const [r,g,b] = rgb(hex); pdf.setFillColor(r,g,b) }
       const dc = (hex) => { const [r,g,b] = rgb(hex); pdf.setDrawColor(r,g,b) }
       const darkBg = () => { fc('#0f172a'); dc('#0f172a'); pdf.rect(0,0,210,297,'FD') }
-      const newPage = (needed = 20) => {
-        if (y + needed > 278) { pdf.addPage(); darkBg(); y = 20 }
-      }
+      const newPage = (needed = 20) => { if (y + needed > 278) { pdf.addPage(); darkBg(); y = 20 } }
       const sc = (s) => s >= 75 ? '#4ade80' : s >= 50 ? '#facc15' : '#f87171'
+      const sl = (s) => s >= 75 ? 'Good' : s >= 50 ? 'Needs Improvement' : 'Critical'
+      const sevColor = { Critical: '#f87171', High: '#fb923c', Medium: '#facc15', Low: '#4ade80', Informational: '#60a5fa' }
+      const severityOrder = { Critical: 0, High: 1, Medium: 2, Low: 3, Informational: 4 }
 
+      // ── PAGE 1: COVER ─────────────────────────────────────────
       darkBg()
 
-      // Cover
-      pdf.setFontSize(28); pdf.setFont('helvetica','bold'); tc('#6366f1')
-      pdf.text('AuditIQ', M, y)
+      // Top accent bar
+      fc('#6366f1'); dc('#6366f1')
+      pdf.rect(0, 0, 210, 8, 'FD')
+
+      // Logo area
+      y = 30
+      pdf.setFontSize(32); pdf.setFont('helvetica','bold'); tc('#ffffff')
+      pdf.text('Audit', M, y)
+      tc('#6366f1')
+      pdf.text('IQ', M + pdf.getTextWidth('Audit'), y)
+
       pdf.setFontSize(11); pdf.setFont('helvetica','normal'); tc('#94a3b8')
-      pdf.text('AI-Powered Digital Marketing Audit Report', M, y+9)
-      y += 18
-      pdf.setFontSize(8); tc('#64748b')
-      pdf.text(`URL: ${result.url}`, M, y); y += 5
-      pdf.text(`Date: ${new Date(result.timestamp).toLocaleString()}`, M, y); y += 8
-      dc('#334155'); pdf.setLineWidth(0.3); pdf.line(M, y, W-M, y); y += 8
+      pdf.text('AI-Powered Digital Marketing Audit', M, y + 9)
+      y += 24
 
-      // Overall Score
+      // Divider
+      dc('#334155'); pdf.setLineWidth(0.3); pdf.line(M, y, W-M, y); y += 12
+
+      // Report info block
       fc('#1e293b'); dc('#334155')
-      pdf.roundedRect(M, y, col, 24, 2, 2, 'FD')
-      pdf.setFontSize(9); pdf.setFont('helvetica','normal'); tc('#94a3b8')
-      pdf.text('Overall Score', W/2, y+7, { align: 'center' })
-      pdf.setFontSize(24); pdf.setFont('helvetica','bold')
-      const [or,og,ob] = rgb(sc(overallScore)); pdf.setTextColor(or,og,ob)
-      pdf.text(`${overallScore}/100`, W/2, y+19, { align: 'center' })
-      y += 32
+      pdf.roundedRect(M, y, col, 36, 3, 3, 'FD')
 
-      // Summary stats
+      pdf.setFontSize(8); pdf.setFont('helvetica','normal'); tc('#64748b')
+      pdf.text('WEBSITE AUDITED', M+6, y+8)
+      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
+      pdf.text(result.url, M+6, y+15)
+
+      pdf.setFontSize(8); pdf.setFont('helvetica','normal'); tc('#64748b')
+      pdf.text('REPORT DATE', M+6, y+24)
+      pdf.setFontSize(9); pdf.setFont('helvetica','normal'); tc('#94a3b8')
+      pdf.text(new Date(result.timestamp).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }), M+6, y+30)
+
+      // Date on right
+      tc('#64748b'); pdf.setFontSize(8)
+      pdf.text('GENERATED BY', W-M-40, y+8)
+      tc('#6366f1'); pdf.setFontSize(10); pdf.setFont('helvetica','bold')
+      pdf.text('AuditIQ Platform', W-M-40, y+15)
+      tc('#64748b'); pdf.setFontSize(8); pdf.setFont('helvetica','normal')
+      pdf.text('auditiq-ezyd.vercel.app', W-M-40, y+24)
+
+      y += 46
+
+      // Overall score hero
+      fc('#1e293b'); dc('#6366f1'); pdf.setLineWidth(0.8)
+      pdf.roundedRect(M, y, col, 40, 3, 3, 'FD')
+      pdf.setFontSize(10); pdf.setFont('helvetica','normal'); tc('#94a3b8')
+      pdf.text('OVERALL AUDIT SCORE', W/2, y+10, { align: 'center' })
+      pdf.setFontSize(36); pdf.setFont('helvetica','bold')
+      const [or,og,ob] = rgb(sc(overallScore)); pdf.setTextColor(or,og,ob)
+      pdf.text(`${overallScore}`, W/2, y+28, { align: 'center' })
+      pdf.setFontSize(12); tc('#94a3b8')
+      pdf.text('/100', W/2 + 10, y+28)
+      pdf.setFontSize(10); pdf.setFont('helvetica','normal')
+      const [slr,slg,slb] = rgb(sc(overallScore)); pdf.setTextColor(slr,slg,slb)
+      pdf.text(sl(overallScore), W/2, y+36, { align: 'center' })
+      y += 50
+
+      // 4 stat boxes
       const stats = [
-        { label: 'Critical Issues', value: criticalCount, color: '#f87171' },
-        { label: 'High Priority', value: highCount, color: '#fb923c' },
-        { label: 'Quick Wins', value: quickWins, color: '#4ade80' },
-        { label: 'Pages Crawled', value: crawl?.pagesCrawled || 1, color: '#818cf8' },
+        { label: 'ISSUES FOUND', value: issues.length, color: '#f87171' },
+        { label: 'CRITICAL', value: criticalCount, color: '#f87171' },
+        { label: 'QUICK WINS', value: quickWins, color: '#4ade80' },
+        { label: 'PAGES CRAWLED', value: crawl?.pagesCrawled || 1, color: '#818cf8' },
       ]
       const statW = (col - 9) / 4
       stats.forEach((s, i) => {
-        const x = M + i * (statW + 3)
-        fc('#1e293b'); dc('#334155')
-        pdf.roundedRect(x, y, statW, 18, 2, 2, 'FD')
-        pdf.setFontSize(14); pdf.setFont('helvetica','bold')
+        const x = M + i*(statW+3)
+        fc('#1e293b'); dc('#334155'); pdf.setLineWidth(0.3)
+        pdf.roundedRect(x, y, statW, 22, 2, 2, 'FD')
+        pdf.setFontSize(18); pdf.setFont('helvetica','bold')
         const [r,g,b] = rgb(s.color); pdf.setTextColor(r,g,b)
-        pdf.text(`${s.value}`, x + statW/2, y+10, { align: 'center' })
-        pdf.setFontSize(6); pdf.setFont('helvetica','normal'); tc('#64748b')
-        pdf.text(s.label, x + statW/2, y+15, { align: 'center' })
+        pdf.text(`${s.value}`, x+statW/2, y+13, { align: 'center' })
+        pdf.setFontSize(5.5); pdf.setFont('helvetica','normal'); tc('#64748b')
+        pdf.text(s.label, x+statW/2, y+19, { align: 'center' })
       })
-      y += 26
+      y += 32
 
-      // Pillar scores
-      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
-      pdf.text('Score Breakdown', M, y); y += 6
-      const cardW = (col - 5) / 2
+      // Pillar score cards
       const cardData = [
         { name: 'SEO Health', score: seo.score },
         { name: 'Technical', score: technical.score },
         { name: 'Content Quality', score: content.score },
         { name: 'Social Presence', score: social.score },
       ]
-      for (let row = 0; row < 2; row++) {
-        newPage(24)
-        for (let c2 = 0; c2 < 2; c2++) {
-          const p = cardData[row*2+c2]
-          const x = M + c2*(cardW+5)
-          fc('#1e293b'); dc('#334155')
-          pdf.roundedRect(x, y, cardW, 20, 2, 2, 'FD')
-          pdf.setFontSize(7); pdf.setFont('helvetica','normal'); tc('#94a3b8')
-          pdf.text(p.name, x+4, y+6)
-          pdf.setFontSize(15); pdf.setFont('helvetica','bold'); tc('#ffffff')
-          pdf.text(`${p.score}`, x+4, y+15)
-          pdf.setFontSize(7)
-          const [r,g,b] = rgb(sc(p.score)); pdf.setTextColor(r,g,b)
-          pdf.text(scoreLabel(p.score), x+cardW-3, y+15, { align: 'right' })
-        }
-        y += 24
-      }
-      y += 4
+      const cW = (col-6)/4
+      cardData.forEach((p, i) => {
+        const x = M + i*(cW+2)
+        fc('#1e293b'); dc('#334155')
+        pdf.roundedRect(x, y, cW, 26, 2, 2, 'FD')
+        pdf.setFontSize(6); pdf.setFont('helvetica','normal'); tc('#64748b')
+        pdf.text(p.name.toUpperCase(), x+cW/2, y+7, { align: 'center' })
+        pdf.setFontSize(16); pdf.setFont('helvetica','bold')
+        const [r,g,b] = rgb(sc(p.score)); pdf.setTextColor(r,g,b)
+        pdf.text(`${p.score}`, x+cW/2, y+18, { align: 'center' })
+        pdf.setFontSize(6); pdf.setFont('helvetica','normal')
+        pdf.text(sl(p.score), x+cW/2, y+23, { align: 'center' })
+      })
+      y += 34
 
       // Score bars
-      newPage(70)
-      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
-      pdf.text('Score Overview', M, y); y += 6
-      const barCardH = cardData.length * 15 + 10
-      fc('#1e293b'); dc('#334155'); pdf.setLineWidth(0.3)
-      pdf.rect(M, y, col, barCardH, 'FD')
-      const lW = 30; const sW = 18; const tW = col - lW - sW - 10; const tX = M+5+lW
-      let bY = y+9
-      cardData.forEach((p) => {
-        pdf.setFontSize(8); pdf.setFont('helvetica','normal'); tc('#94a3b8')
-        pdf.text(p.name, M+4, bY+4)
+      fc('#1e293b'); dc('#334155')
+      pdf.roundedRect(M, y, col, cardData.length*13+6, 2, 2, 'FD')
+      let bY = y+8
+      const lW=28; const tW=col-lW-22; const tX=M+5+lW
+      cardData.forEach(p => {
+        pdf.setFontSize(7); pdf.setFont('helvetica','normal'); tc('#94a3b8')
+        pdf.text(p.name, M+4, bY+3.5)
         fc('#0f172a'); dc('#0f172a'); pdf.rect(tX, bY, tW, 5, 'FD')
-        if (p.score > 0) {
-          const fw = (p.score/100)*tW
-          const [r,g,b] = rgb(sc(p.score)); pdf.setFillColor(r,g,b); pdf.setDrawColor(r,g,b)
+        if(p.score>0){
+          const fw=(p.score/100)*tW
+          const [r,g,b]=rgb(sc(p.score)); pdf.setFillColor(r,g,b); pdf.setDrawColor(r,g,b)
           pdf.rect(tX, bY, fw, 5, 'FD')
         }
-        pdf.setFontSize(8); pdf.setFont('helvetica','bold'); tc('#ffffff')
-        pdf.text(`${p.score}/100`, tX+tW+3, bY+4)
-        bY += 15
+        pdf.setFontSize(7); pdf.setFont('helvetica','bold'); tc('#ffffff')
+        pdf.text(`${p.score}/100`, tX+tW+3, bY+3.5)
+        bY+=13
       })
-      y += barCardH + 8
+      y += cardData.length*13+14
 
-      // PageSpeed
-      if (pageSpeed) {
-        newPage(60)
-        pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
-        pdf.text('Core Web Vitals', M, y); y += 6
+      // Footer page 1
+      dc('#334155'); pdf.setLineWidth(0.3); pdf.line(M, 282, W-M, 282)
+      tc('#475569'); pdf.setFontSize(7)
+      pdf.text('AuditIQ — Confidential Audit Report', M, 287)
+      pdf.text('Page 1', W-M, 287, { align: 'right' })
+
+      // ── PAGE 2: PERFORMANCE + ISSUES ────────────────────────
+      pdf.addPage(); darkBg()
+      // accent bar
+      fc('#6366f1'); dc('#6366f1'); pdf.rect(0,0,210,4,'FD')
+      y = 16
+
+      // Section header helper
+      function sectionHeader(title) {
+        newPage(16)
         fc('#1e293b'); dc('#334155')
-        pdf.rect(M, y, col, 50, 'FD')
-        const vitals = Object.entries(pageSpeed.coreWebVitals)
-        const vW = col / 3
-        vitals.slice(0,6).forEach(([key, v], i) => {
-          const row = Math.floor(i/3); const col2 = i%3
-          const vx = M + col2*vW + vW/2
-          const vy = y + 10 + row*24
-          const vc = v.status === 'Good' ? '#4ade80' : v.status === 'Needs Improvement' ? '#facc15' : '#f87171'
-          pdf.setFontSize(8); pdf.setFont('helvetica','bold')
-          const [r,g,b] = rgb(vc); pdf.setTextColor(r,g,b)
-          pdf.text(v.value, vx, vy, { align: 'center' })
-          pdf.setFontSize(6); pdf.setFont('helvetica','normal'); tc('#64748b')
-          pdf.text(key, vx, vy+5, { align: 'center' })
-          pdf.setFontSize(6); tc(vc)
-          pdf.text(v.status, vx, vy+9, { align: 'center' })
-        })
-        y += 58
+        pdf.roundedRect(M, y, col, 10, 2, 2, 'FD')
+        dc('#6366f1'); pdf.setLineWidth(0.5)
+        pdf.line(M, y, M, y+10)
+        pdf.setFontSize(10); pdf.setFont('helvetica','bold'); tc('#ffffff')
+        pdf.text(title, M+5, y+7)
+        y += 16
       }
 
-      // Issues
-      newPage(20)
-      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
-      pdf.text(`Issues Found (${issues.length})`, M, y); y += 7
-      const sevColors = { Critical: '#f87171', High: '#fb923c', Medium: '#facc15', Low: '#4ade80', Informational: '#60a5fa' }
-      const topIssues = [...issues].sort((a,b) => (severityOrder[a.severity]||0)-(severityOrder[b.severity]||0)).slice(0,12)
-      topIssues.forEach((issue) => {
-        const lines = pdf.splitTextToSize(issue.fix, col-8)
-        const h = 7 + 6 + lines.length * 4 + 5
+      // Page number helper
+      let pageNum = 2
+      function addPageFooter() {
+        dc('#334155'); pdf.setLineWidth(0.3); pdf.line(M, 282, W-M, 282)
+        tc('#475569'); pdf.setFontSize(7)
+        pdf.text('AuditIQ — Confidential Audit Report', M, 287)
+        pdf.text(`Page ${pageNum}`, W-M, 287, { align: 'right' })
+        pageNum++
+      }
+
+      // Core Web Vitals
+      if(pageSpeed) {
+        sectionHeader('Core Web Vitals & Performance')
+
+        // Lighthouse scores
+        const lhScores = [
+          { label: 'Performance', score: pageSpeed.performanceScore },
+          { label: 'SEO', score: pageSpeed.seoScore },
+          { label: 'Best Practices', score: pageSpeed.bestPracticesScore },
+          { label: 'Accessibility', score: pageSpeed.accessibilityScore },
+        ]
+        const lW2 = (col-6)/4
+        newPage(24)
+        lhScores.forEach((s,i) => {
+          const x = M+i*(lW2+2)
+          fc('#1e293b'); dc('#334155')
+          pdf.roundedRect(x, y, lW2, 20, 2, 2, 'FD')
+          pdf.setFontSize(14); pdf.setFont('helvetica','bold')
+          const [r,g,b]=rgb(sc(s.score)); pdf.setTextColor(r,g,b)
+          pdf.text(`${s.score}`, x+lW2/2, y+12, { align: 'center' })
+          pdf.setFontSize(6); pdf.setFont('helvetica','normal'); tc('#64748b')
+          pdf.text(s.label.toUpperCase(), x+lW2/2, y+17, { align: 'center' })
+        })
+        y += 28
+
+        // Vitals grid
+        newPage(40)
+        const vitals = Object.entries(pageSpeed.coreWebVitals)
+        const vW2 = (col-4)/3
+        vitals.forEach(([key,v],i) => {
+          const row=Math.floor(i/3); const col2=i%3
+          const x=M+col2*(vW2+2); const vy=y+row*22
+          newPage(24)
+          fc('#1e293b'); dc('#334155')
+          pdf.roundedRect(x, vy, vW2, 20, 2, 2, 'FD')
+          const vc = v.status==='Good'?'#4ade80':v.status==='Needs Improvement'?'#facc15':'#f87171'
+          pdf.setFontSize(10); pdf.setFont('helvetica','bold')
+          const [r,g,b]=rgb(vc); pdf.setTextColor(r,g,b)
+          pdf.text(v.value, x+vW2/2, vy+9, { align: 'center' })
+          pdf.setFontSize(6); pdf.setFont('helvetica','normal'); tc('#64748b')
+          pdf.text(key, x+vW2/2, vy+13, { align: 'center' })
+          pdf.setFontSize(6); const [r2,g2,b2]=rgb(vc); pdf.setTextColor(r2,g2,b2)
+          pdf.text(v.status, x+vW2/2, vy+17, { align: 'center' })
+        })
+        y += Math.ceil(vitals.length/3)*22+6
+
+        // Opportunities
+        if(pageSpeed.opportunities?.length > 0) {
+          newPage(20)
+          pdf.setFontSize(8); pdf.setFont('helvetica','bold'); tc('#ffffff')
+          pdf.text('Optimization Opportunities', M, y); y+=6
+          pageSpeed.opportunities.forEach(o => {
+            newPage(10)
+            fc('#1e293b'); dc('#334155')
+            pdf.roundedRect(M, y, col, 9, 1, 1, 'FD')
+            pdf.setFontSize(7); pdf.setFont('helvetica','normal'); tc('#ffffff')
+            pdf.text(o.title, M+3, y+5.5, { maxWidth: col-30 })
+            if(o.displayValue) { tc('#64748b'); pdf.text(o.displayValue, W-M-3, y+5.5, { align: 'right' }) }
+            y+=11
+          })
+          y+=4
+        }
+      }
+
+      addPageFooter()
+
+      // ── ISSUES SECTION ─────────────────────────────────────
+      pdf.addPage(); darkBg()
+      fc('#6366f1'); dc('#6366f1'); pdf.rect(0,0,210,4,'FD')
+      y = 16
+      pageNum++
+
+      sectionHeader(`Issues Audit — ${issues.length} Issues Found`)
+
+      // Issues summary table header
+      newPage(12)
+      fc('#334155'); dc('#334155')
+      pdf.rect(M, y, col, 8, 'FD')
+      pdf.setFontSize(7); pdf.setFont('helvetica','bold'); tc('#94a3b8')
+      pdf.text('SEVERITY', M+3, y+5.5)
+      pdf.text('PILLAR', M+28, y+5.5)
+      pdf.text('ISSUE', M+50, y+5.5)
+      pdf.text('EFFORT', W-M-20, y+5.5, { align: 'right' })
+      y+=10
+
+      const sortedIssues = [...issues].sort((a,b) => (severityOrder[a.severity]||0)-(severityOrder[b.severity]||0))
+      sortedIssues.forEach(issue => {
+        const descLines = pdf.splitTextToSize(issue.detail || '', col-8)
+        const fixLines = pdf.splitTextToSize(issue.fix || '', col-8)
+        const h = 8 + descLines.length*4 + fixLines.length*4 + 6
         newPage(h+4)
         fc('#1e293b'); dc('#334155'); pdf.setLineWidth(0.3)
         pdf.roundedRect(M, y, col, h, 2, 2, 'FD')
-        const sc2 = sevColors[issue.severity] || '#94a3b8'
-        const [r,g,b] = rgb(sc2); pdf.setTextColor(r,g,b)
-        pdf.setFontSize(7); pdf.setFont('helvetica','bold')
+
+        // Severity color bar
+        const sc2 = sevColor[issue.severity] || '#94a3b8'
+        const [r,g,b]=rgb(sc2); pdf.setFillColor(r,g,b); pdf.setDrawColor(r,g,b)
+        pdf.rect(M, y, 2, h, 'F')
+
+        // Header row
+        pdf.setFontSize(7); pdf.setFont('helvetica','bold'); pdf.setTextColor(r,g,b)
         pdf.text(issue.severity, M+4, y+6)
         tc('#64748b'); pdf.setFont('helvetica','normal')
-        pdf.text(`· ${issue.pillar} · ${issue.effort}`, M+4+pdf.getTextWidth(issue.severity)+2, y+6)
-        tc('#ffffff'); pdf.setFontSize(8); pdf.setFont('helvetica','bold')
-        pdf.text(issue.title, M+4, y+12)
+        pdf.text(`${issue.pillar}`, M+26, y+6)
+        tc('#ffffff'); pdf.setFont('helvetica','bold'); pdf.setFontSize(8)
+        pdf.text(issue.title, M+46, y+6, { maxWidth: col-70 })
+        tc('#64748b'); pdf.setFontSize(7); pdf.setFont('helvetica','normal')
+        pdf.text(issue.effort||'', W-M-3, y+6, { align: 'right' })
+
+        // Detail
         tc('#94a3b8'); pdf.setFontSize(7); pdf.setFont('helvetica','normal')
-        pdf.text(lines, M+4, y+18)
+        pdf.text(descLines, M+4, y+12)
+
+        // Fix
+        const fixY = y+12+descLines.length*4+2
+        tc('#818cf8'); pdf.setFont('helvetica','italic')
+        pdf.text('Fix: ', M+4, fixY)
+        tc('#6366f1'); pdf.setFont('helvetica','normal')
+        pdf.text(fixLines, M+4+pdf.getTextWidth('Fix: '), fixY)
+
         y += h+4
       })
 
+      addPageFooter()
+
+      // ── PAGE: KEYWORDS + PRIORITY MATRIX ───────────────────
+      pdf.addPage(); darkBg()
+      fc('#6366f1'); dc('#6366f1'); pdf.rect(0,0,210,4,'FD')
+      y = 16
+      pageNum++
+
       // Keywords
-      if (seo.topKeywords?.length > 0) {
-        newPage(60)
-        pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
-        pdf.text('Keyword Analysis', M, y); y += 6
+      if(seo.topKeywords?.length > 0) {
+        sectionHeader('Keyword Analysis')
+        newPage(16)
+
+        // Keyword placement check
+        const placements = [
+          { label: 'In Title', val: seo.keywordInTitle },
+          { label: 'In H1', val: seo.keywordInH1 },
+          { label: 'In Meta', val: seo.keywordInMeta },
+          { label: 'In URL', val: seo.keywordInURL },
+        ]
+        const pW = (col-6)/4
+        placements.forEach((p,i) => {
+          const x=M+i*(pW+2)
+          fc('#1e293b'); dc('#334155')
+          pdf.roundedRect(x, y, pW, 14, 2, 2, 'FD')
+          pdf.setFontSize(10); pdf.setFont('helvetica','bold')
+          const color = p.val?'#4ade80':'#f87171'
+          const [r,g,b]=rgb(color); pdf.setTextColor(r,g,b)
+          pdf.text(p.val ? 'YES' : 'NO', x+pW/2, y+8, { align: 'center' })
+          pdf.setFontSize(6); pdf.setFont('helvetica','normal'); tc('#64748b')
+          pdf.text(p.label, x+pW/2, y+12, { align: 'center' })
+        })
+        y+=20
+
+        pdf.setFontSize(7); tc('#64748b')
+        pdf.text(`Primary keyword: "${seo.primaryKeyword}"`, M, y); y+=6
+
+        // Keyword bars
         fc('#1e293b'); dc('#334155')
-        pdf.rect(M, y, col, seo.topKeywords.length*12+8, 'FD')
-        let kY = y+8
-        seo.topKeywords.forEach((kw) => {
+        pdf.roundedRect(M, y, col, seo.topKeywords.length*12+6, 2, 2, 'FD')
+        let kY=y+8
+        seo.topKeywords.forEach(kw => {
           pdf.setFontSize(8); pdf.setFont('helvetica','normal'); tc('#ffffff')
           pdf.text(kw.word, M+4, kY)
-          fc('#0f172a'); dc('#0f172a')
-          pdf.rect(M+30, kY-4, 80, 5, 'FD')
-          const kfw = Math.min((kw.density/5)*80, 80)
+          fc('#0f172a'); dc('#0f172a'); pdf.rect(M+34, kY-4, 90, 5, 'FD')
+          const kfw=Math.min((kw.density/5)*90,90)
           pdf.setFillColor(99,102,241); pdf.setDrawColor(99,102,241)
-          pdf.rect(M+30, kY-4, kfw, 5, 'FD')
+          pdf.rect(M+34, kY-4, kfw, 5, 'FD')
           tc('#64748b'); pdf.setFontSize(7)
-          pdf.text(`${kw.density}%  ×${kw.count}`, M+114, kY)
-          kY += 12
+          pdf.text(`${kw.density}%  x${kw.count}`, M+128, kY)
+          kY+=12
         })
-        y += seo.topKeywords.length*12+16
+        y+=seo.topKeywords.length*12+14
       }
 
-      // Recommendations
+      // Priority Matrix as table
       newPage(20)
-      pdf.setFontSize(11); pdf.setFont('helvetica','bold'); tc('#ffffff')
-      pdf.text('AI Recommendations', M, y); y += 7
+      sectionHeader('Priority Matrix')
+
+      const matrixIssues = [...issues]
+        .filter(i => i.severity !== 'Informational')
+        .sort((a,b) => (severityOrder[a.severity]||0)-(severityOrder[b.severity]||0))
+
+      // Table header
+      newPage(10)
+      fc('#334155'); dc('#334155')
+      pdf.rect(M, y, col, 8, 'FD')
+      pdf.setFontSize(7); pdf.setFont('helvetica','bold'); tc('#94a3b8')
+      pdf.text('ISSUE', M+3, y+5.5)
+      pdf.text('SEVERITY', W-M-50, y+5.5)
+      pdf.text('IMPACT', W-M-30, y+5.5)
+      pdf.text('EFFORT', W-M-10, y+5.5, { align: 'right' })
+      y+=10
+
+      matrixIssues.forEach(issue => {
+        newPage(10)
+        fc('#1e293b'); dc('#334155'); pdf.setLineWidth(0.3)
+        pdf.roundedRect(M, y, col, 9, 1, 1, 'FD')
+        const sc3 = sevColor[issue.severity] || '#94a3b8'
+        const [r,g,b]=rgb(sc3); pdf.setTextColor(r,g,b)
+        pdf.setFontSize(6); pdf.setFont('helvetica','bold')
+        pdf.text(issue.severity, W-M-50, y+5.5)
+        tc('#ffffff'); pdf.setFont('helvetica','normal'); pdf.setFontSize(7)
+        pdf.text(issue.title, M+3, y+5.5, { maxWidth: col-70 })
+        tc('#64748b'); pdf.setFontSize(6)
+        pdf.text(issue.impact||'', W-M-30, y+5.5)
+        pdf.text(issue.effort||'', W-M-10, y+5.5, { align: 'right' })
+        y+=11
+      })
+
+      addPageFooter()
+
+      // ── PAGE: CRAWL + RECOMMENDATIONS ──────────────────────
+      pdf.addPage(); darkBg()
+      fc('#6366f1'); dc('#6366f1'); pdf.rect(0,0,210,4,'FD')
+      y = 16
+      pageNum++
+
+      // Pages crawled
+      if(crawl?.pages?.length > 0) {
+        sectionHeader(`Pages Crawled (${crawl.pagesCrawled})`)
+        crawl.pages.forEach(page => {
+          newPage(28)
+          fc('#1e293b'); dc('#334155')
+          pdf.roundedRect(M, y, col, 26, 2, 2, 'FD')
+          tc('#6366f1'); pdf.setFontSize(7); pdf.setFont('helvetica','normal')
+          pdf.text(page.url, M+4, y+6, { maxWidth: col-8 })
+          const cols2 = [
+            { label: 'TITLE', val: page.title || 'Missing', ok: !!page.title },
+            { label: 'META DESC', val: page.hasMetaDescription?'Present':'Missing', ok: page.hasMetaDescription },
+            { label: 'H1', val: page.hasH1?`${page.h1Count} found`:'Missing', ok: page.hasH1&&page.h1Count===1 },
+            { label: 'SCHEMA', val: page.hasSchema?'Present':'Missing', ok: page.hasSchema },
+          ]
+          const colW2 = col/4
+          cols2.forEach((c,i) => {
+            const x=M+i*colW2
+            pdf.setFontSize(5.5); pdf.setFont('helvetica','normal'); tc('#64748b')
+            pdf.text(c.label, x+4, y+14)
+            pdf.setFontSize(7); pdf.setFont('helvetica','bold')
+            const [r,g,b]=rgb(c.ok?'#4ade80':'#f87171'); pdf.setTextColor(r,g,b)
+            pdf.text(c.val, x+4, y+20)
+          })
+          y+=30
+        })
+
+        if(crawl.crossPageIssues?.length > 0) {
+          newPage(16)
+          pdf.setFontSize(8); pdf.setFont('helvetica','bold'); tc('#facc15')
+          pdf.text('Cross-Page Issues', M, y); y+=6
+          crawl.crossPageIssues.forEach(issue => {
+            newPage(12)
+            fc('#1e293b'); dc('#facc15'); pdf.setLineWidth(0.3)
+            pdf.roundedRect(M, y, col, 10, 2, 2, 'FD')
+            tc('#ffffff'); pdf.setFontSize(7); pdf.setFont('helvetica','bold')
+            pdf.text(issue.title, M+4, y+6.5)
+            y+=12
+          })
+          y+=4
+        }
+      }
+
+      // AI Recommendations
+      sectionHeader('AI Recommendations')
       const pColors = { High: '#f87171', Medium: '#facc15', Low: '#4ade80' }
-      recommendations.forEach((rec) => {
+      recommendations.forEach(rec => {
         const lines = pdf.splitTextToSize(rec.description, col-8)
-        const h = 8+6+lines.length*4+5
+        const h = 8+6+lines.length*4+4
         newPage(h+4)
         fc('#1e293b'); dc('#334155'); pdf.setLineWidth(0.3)
         pdf.roundedRect(M, y, col, h, 2, 2, 'FD')
-        const [r,g,b] = rgb(pColors[rec.priority]||'#94a3b8'); pdf.setTextColor(r,g,b)
+        const rc = pColors[rec.priority]||'#94a3b8'
+        const [r,g,b]=rgb(rc); pdf.setTextColor(r,g,b)
         pdf.setFontSize(7); pdf.setFont('helvetica','bold')
         pdf.text(rec.priority, M+4, y+6)
         tc('#64748b'); pdf.setFont('helvetica','normal')
@@ -315,14 +655,10 @@ export default function ReportPage() {
         pdf.text(rec.title, M+4, y+13)
         tc('#94a3b8'); pdf.setFontSize(7.5); pdf.setFont('helvetica','normal')
         pdf.text(lines, M+4, y+19)
-        y += h+4
+        y+=h+4
       })
 
-      // Footer
-      newPage(12); y+=4
-      dc('#334155'); pdf.line(M,y,W-M,y); y+=5
-      tc('#475569'); pdf.setFontSize(7)
-      pdf.text('Generated by AuditIQ — AI-Powered Digital Marketing Audit', W/2, y, { align: 'center' })
+      addPageFooter()
 
       pdf.save('AuditIQ-Report.pdf')
     } catch(err) {
@@ -611,6 +947,13 @@ export default function ReportPage() {
                 </Card>
               )}
             </div>
+          </Section>
+        )}
+
+        {/* Priority Matrix */}
+        {issues.length > 0 && (
+          <Section title="Priority Matrix — Impact vs Effort">
+            <PriorityMatrix issues={issues} />
           </Section>
         )}
 

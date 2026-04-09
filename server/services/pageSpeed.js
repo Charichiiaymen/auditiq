@@ -8,7 +8,16 @@ async function getPageSpeedData(url) {
   }
 
   try {
-    const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&key=${apiKey}&strategy=mobile&category=performance&category=seo&category=best-practices&category=accessibility`
+    const params = new URLSearchParams({
+      url: url,
+      key: apiKey,
+      strategy: 'mobile',
+    })
+    params.append('category', 'performance')
+    params.append('category', 'seo')
+    params.append('category', 'best-practices')
+    params.append('category', 'accessibility')
+    const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params.toString()}`
 
     const response = await axios.get(apiUrl, { timeout: 30000 })
     const data = response.data
@@ -134,7 +143,7 @@ async function getPageSpeedData(url) {
       fetchedAt: new Date().toISOString(),
     }
   } catch (err) {
-    console.error('PageSpeed API error:', err.message)
+    console.error('PageSpeed API FULL ERROR:', JSON.stringify(err.response?.data || err.message))
     return null
   }
 }
