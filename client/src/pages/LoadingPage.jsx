@@ -17,120 +17,98 @@ function LoadingPage() {
 
   useEffect(() => {
     const pending = localStorage.getItem('auditPending')
-    if (!pending) {
-      navigate('/')
-      return
-    }
-
+    if (!pending) { navigate('/'); return }
     const { url, instagram, facebook } = JSON.parse(pending)
 
-    // Step animation
     let step = 0
     const interval = setInterval(() => {
       step += 1
       if (step < steps.length - 1) setCurrentStep(step)
-    }, 4000)
+    }, 3000)
 
-    // Run audit
-    axios.post('https://auditiq-five.vercel.app/api/audit', { url, instagram, facebook })
-      .then(async (response) => {
-        clearInterval(interval)
-        setCurrentStep(steps.length - 1)
+    async function runAudit() {
+      try {
+        // STEP 1: Fast audit — scraping, issues, AI (under 10s)
+        setCurrentStep(0)
+        const fastResponse = await axios.post(
+          'https://auditiq-five.vercel.app/api/audit',
+          { url, instagram, facebook },
+          { timeout: 60000 }
+        )
+        const fastResult = fastResponse.data
+        setCurrentStep(3)
 
-        // Fetch PageSpeed directly from frontend to bypass Vercel timeout
+        // STEP 2: PageSpeed — called from browser, no timeout limit
+        setCurrentStep(4)
         let pageSpeedData = null
         try {
-          const params = new URLSearchParams({ url, key: 'AIzaSyBAoO47Z2NWi5CCC5acxXp8gn4rcyjs1VQ', strategy: 'mobile' })
+          const params = new URLSearchParams({
+            url,
+            key: import.meta.env.VITE_PAGESPEED_KEY,
+            strategy: 'mobile'
+          })
           params.append('category', 'performance')
           params.append('category', 'seo')
           params.append('category', 'best-practices')
           params.append('category', 'accessibility')
-          const psResponse = await axios.get(
+
+          const psRes = await axios.get(
             `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params.toString()}`,
             { timeout: 60000 }
           )
-          const data = psResponse.data
-          const categories = data.lighthouseResult?.categories || {}
-          const audits = data.lighthouseResult?.audits || {}
-          const getVital = (id, desc) => ({
-            value: audits[id]?.displayValue || 'N/A',
-            score: audits[id]?.score || 0,
-            status: audits[id]?.score >= 0.9 ? 'Good' : audits[id]?.score >= 0.5 ? 'Needs Improvement' : 'Poor',
+          const d = psRes.data
+          const cats = d.lighthouseResult?.categories || {}
+          const aud = d.lighthouseResult?.audits || {}
+
+          const vital = (id, desc) => ({
+            value: aud[id]?.displayValue || 'N/A',
+            score: aud[id]?.score || 0,
+            status: (aud[id]?.score || 0) >= 0.9 ? 'Good' : (aud[id]?.score || 0) >= 0.5 ? 'Needs Improvement' : 'Poor',
             description: desc
           })
-          const opportunities = []
-          const oppIds = ['render-blocking-resources','unused-css-rules','unused-javascript','uses-optimized-images','uses-webp-images','uses-text-compression','uses-responsive-images','efficient-animated-content','uses-rel-preconnect','font-display']
-          oppIds.forEach(id => {
-            const a = audits[id]
-            if (a && a.score !== null && a.score < 0.9) {
-              opportunities.push({ id, title: a.title, displayValue: a.displayValue || '', score: a.score, impact: a.score < 0.5 ? 'High' : 'Medium' })
-            }
-          })
+
+          const oppIds = ['render-blocking-resources','unused-css-rules','unused-javascript','uses-optimized-images','uses-webp-images','uses-text-compression']
+          const opportunities = oppIds
+            .filter(id => aud[id] && aud[id].score !== null && aud[id].score < 0.9)
+            .map(id => ({ id, title: aud[id].title, displayValue: aud[id].displayValue || '', score: aud[id].score, impact: aud[id].score < 0.5 ? 'High' : 'Medium' }))
+            .slice(0, 6)
+
           pageSpeedData = {
-            performanceScore: Math.round((categories.performance?.score || 0) * 100),
-            seoScore: Math.round((categories.seo?.score || 0) * 100),
-            bestPracticesScore: Math.round((categories['best-practices']?.score || 0) * 100),
-            accessibilityScore: Math.round((categories.accessibility?.score || 0) * 100),
+            performanceScore: Math.round((cats.performance?.score || 0) * 100),
+            seoScore: Math.round((cats.seo?.score || 0) * 100),
+            bestPracticesScore: Math.round((cats['best-practices']?.score || 0) * 100),
+            accessibilityScore: Math.round((cats.accessibility?.score || 0) * 100),
             coreWebVitals: {
-              LCP: getVital('largest-contentful-paint', 'Largest Contentful Paint — measures loading performance'),
-              FCP: getVital('first-contentful-paint', 'First Contentful Paint — time until first content appears'),
-              CLS: getVital('cumulative-layout-shift', 'Cumulative Layout Shift — measures visual stability'),
-              TBT: getVital('total-blocking-time', 'Total Blocking Time — measures interactivity'),
-              TTFB: getVital('server-response-time', 'Time to First Byte — measures server response speed'),
-              SpeedIndex: getVital('speed-index', 'Speed Index — how quickly content is visually displayed'),
+              LCP: vital('largest-contentful-paint', 'Largest Contentful Paint — measures loading performance'),
+              FCP: vital('first-contentful-paint', 'First Contentful Paint — time until first content appears'),
+              CLS: vital('cumulative-layout-shift', 'Cumulative Layout Shift — measures visual stability'),
+              TBT: vital('total-blocking-time', 'Total Blocking Time — measures interactivity'),
+              TTFB: vital('server-response-time', 'Time to First Byte — measures server response speed'),
+              SpeedIndex: vital('speed-index', 'Speed Index — how quickly content is visually displayed'),
             },
-            opportunities: opportunities.slice(0, 6),
+            opportunities,
             diagnostics: [],
-            fetchedAt: new Date().toISOString(),
+            fetchedAt: new Date().toISOString()
           }
         } catch (psErr) {
-          console.error('PageSpeed fetch failed:', psErr.message)
+          console.error('PageSpeed error:', psErr.message)
         }
 
-        const result = { ...response.data, pageSpeed: pageSpeedData }
-        localStorage.removeItem('auditPending')
-        // Sanitize data before storing in localStorage
-        const sanitizedData = sanitizeUserData(result)
-        localStorage.setItem('auditResult', JSON.stringify(sanitizedData))
-        setTimeout(() => navigate('/report'), 800)
-      })
-      .catch((err) => {
         clearInterval(interval)
-        // Redirect to error page with detailed error details
-        let errorMessage = 'Audit failed. Please try again.'
-        let errorStatus = 'Audit Failed'
+        setCurrentStep(steps.length - 1)
 
-        // Handle different types of errors
-        if (err.response) {
-          // Server responded with error status
-          const status = err.response.status
-          errorStatus = `Audit Failed (${status})`
+        const finalResult = { ...fastResult, pageSpeed: pageSpeedData }
+        localStorage.removeItem('auditPending')
+        localStorage.setItem('auditResult', JSON.stringify(finalResult))
+        setTimeout(() => navigate('/report'), 800)
 
-          // Use user-friendly error messages for common HTTP status codes
-          errorMessage = getUserFriendlyErrorMessage(status, err.response.data?.error)
+      } catch (err) {
+        clearInterval(interval)
+        setError(err?.response?.data?.error || 'Audit failed. Please try again.')
+      }
+    }
 
-          // Sanitize any backend error messages
-          errorMessage = sanitizeErrorMessage(errorMessage)
-        } else if (err.request) {
-          // Network error (no response received)
-          errorMessage = 'Network error. Please check your internet connection and try again.'
-          errorStatus = 'Connection Failed'
-        } else {
-          // Something else happened
-          errorMessage = err.message || 'An unexpected error occurred. Please try again.'
-          errorStatus = 'Unexpected Error'
-          // Sanitize any error messages
-          errorMessage = sanitizeErrorMessage(errorMessage)
-        }
-
-        navigate('/error', {
-          state: {
-            message: errorMessage,
-            status: errorStatus
-          }
-        })
-      })
-
+    runAudit()
     return () => clearInterval(interval)
   }, [navigate])
 
