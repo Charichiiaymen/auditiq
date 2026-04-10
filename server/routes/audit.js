@@ -1,11 +1,55 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { removeStopwords, eng, fra } = require('stopword');
 const { generateRecommendations } = require('../services/aiRecommender');
 const { getPageSpeedData } = require('../services/pageSpeed');
 const { crawlSite } = require('../services/multiPageCrawler');
 
 const router = express.Router();
+
+// ─── Advanced Keyword Extraction ───────────────────────────────────────────
+function extractKeywords(text) {
+  // Remove HTML entities and extra whitespace
+  let cleanText = text.replace(/&[a-z]+;/gi, ' ') // Remove HTML entities like &nbsp;
+                     .replace(/<[^>]*>/g, ' ')    // Remove any remaining HTML tags
+                     .replace(/[^\w\s]/gi, ' ')   // Remove punctuation
+                     .replace(/\s+/g, ' ')        // Normalize whitespace
+                     .trim()
+                     .toLowerCase();
+
+  // Split into words and filter out short words
+  let words = cleanText.split(' ').filter(w => w.length >= 3);
+
+  // Remove stopwords using both English and French dictionaries
+  words = removeStopwords(words, [...eng, ...fra]);
+
+  // Further filter to ensure quality keywords
+  words = words.filter(w => {
+    // Remove words with numbers
+    if (/\d/.test(w)) return false;
+    // Remove words that are mostly vowels or consonants
+    if (w.length < 3) return false;
+    return true;
+  });
+
+  // Calculate frequency
+  const wordFreq = {};
+  words.forEach(w => { wordFreq[w] = (wordFreq[w] || 0) + 1 });
+
+  // Sort by frequency
+  const sortedWords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1]);
+
+  // Calculate density and return top keywords
+  const totalWords = words.length;
+  const topKeywords = sortedWords.slice(0, 5).map(([word, count]) => ({
+    word,
+    count,
+    density: parseFloat(((count / totalWords) * 100).toFixed(2))
+  }));
+
+  return topKeywords;
+}
 
 // ─── STEP 1: Fetch the page HTML ───────────────────────────────────────────
 async function fetchPage(url) {
@@ -76,16 +120,8 @@ function auditSEO(html, url) {
   })
 
   // ── Keyword Analysis ───────────────────────────────────────
-  const bodyText = $('body').text().replace(/\s+/g, ' ').trim().toLowerCase()
-  const words = bodyText.split(' ').filter(w => w.length > 3)
-  const wordFreq = {}
-  words.forEach(w => { wordFreq[w] = (wordFreq[w] || 0) + 1 })
-  const sortedWords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1])
-  const topKeywords = sortedWords.slice(0, 5).map(([word, count]) => ({
-    word,
-    count,
-    density: parseFloat(((count / words.length) * 100).toFixed(2))
-  }))
+  const bodyText = $('body').text()
+  const topKeywords = extractKeywords(bodyText)
 
   const primaryKeyword = topKeywords[0]?.word || ''
   const keywordInTitle = primaryKeyword ? titleText.toLowerCase().includes(primaryKeyword) : false
@@ -277,18 +313,10 @@ function auditContent(html) {
   const $ = cheerio.load(html);
 
   // ── Keyword Analysis ───────────────────────────────────────
-  const bodyText = $('body').text().replace(/\s+/g, ' ').trim().toLowerCase();
-  const words = bodyText.split(' ').filter(w => w.length > 3);
-  const wordFreq = {};
-  words.forEach(w => { wordFreq[w] = (wordFreq[w] || 0) + 1 });
-  const sortedWords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1]);
-  const topKeywords = sortedWords.slice(0, 5).map(([word, count]) => ({
-    word,
-    count,
-    density: parseFloat(((count / words.length) * 100).toFixed(2))
-  }));
+  const bodyText = $('body').text();
+  const topKeywords = extractKeywords(bodyText);
 
-  const wordCount = words.length;
+  const wordCount = $('body').text().split(/\s+/).filter(w => w.length > 0).length;
 
   const ctaKeywords = ['buy', 'order', 'subscribe', 'sign up', 'get started', 'contact', 'book', 'demo', 'try', 'download', 'shop now', 'learn more', 'get a quote'];
   const bodyLower = bodyText.toLowerCase();
