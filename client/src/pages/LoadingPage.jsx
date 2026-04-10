@@ -33,12 +33,64 @@ function LoadingPage() {
 
     // Run audit
     axios.post('https://auditiq-five.vercel.app/api/audit', { url, instagram, facebook })
-      .then((response) => {
+      .then(async (response) => {
         clearInterval(interval)
         setCurrentStep(steps.length - 1)
+
+        // Fetch PageSpeed directly from frontend to bypass Vercel timeout
+        let pageSpeedData = null
+        try {
+          const params = new URLSearchParams({ url, key: 'AIzaSyBAoO47Z2NWi5CCC5acxXp8gn4rcyjs1VQ', strategy: 'mobile' })
+          params.append('category', 'performance')
+          params.append('category', 'seo')
+          params.append('category', 'best-practices')
+          params.append('category', 'accessibility')
+          const psResponse = await axios.get(
+            `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params.toString()}`,
+            { timeout: 60000 }
+          )
+          const data = psResponse.data
+          const categories = data.lighthouseResult?.categories || {}
+          const audits = data.lighthouseResult?.audits || {}
+          const getVital = (id, desc) => ({
+            value: audits[id]?.displayValue || 'N/A',
+            score: audits[id]?.score || 0,
+            status: audits[id]?.score >= 0.9 ? 'Good' : audits[id]?.score >= 0.5 ? 'Needs Improvement' : 'Poor',
+            description: desc
+          })
+          const opportunities = []
+          const oppIds = ['render-blocking-resources','unused-css-rules','unused-javascript','uses-optimized-images','uses-webp-images','uses-text-compression','uses-responsive-images','efficient-animated-content','uses-rel-preconnect','font-display']
+          oppIds.forEach(id => {
+            const a = audits[id]
+            if (a && a.score !== null && a.score < 0.9) {
+              opportunities.push({ id, title: a.title, displayValue: a.displayValue || '', score: a.score, impact: a.score < 0.5 ? 'High' : 'Medium' })
+            }
+          })
+          pageSpeedData = {
+            performanceScore: Math.round((categories.performance?.score || 0) * 100),
+            seoScore: Math.round((categories.seo?.score || 0) * 100),
+            bestPracticesScore: Math.round((categories['best-practices']?.score || 0) * 100),
+            accessibilityScore: Math.round((categories.accessibility?.score || 0) * 100),
+            coreWebVitals: {
+              LCP: getVital('largest-contentful-paint', 'Largest Contentful Paint — measures loading performance'),
+              FCP: getVital('first-contentful-paint', 'First Contentful Paint — time until first content appears'),
+              CLS: getVital('cumulative-layout-shift', 'Cumulative Layout Shift — measures visual stability'),
+              TBT: getVital('total-blocking-time', 'Total Blocking Time — measures interactivity'),
+              TTFB: getVital('server-response-time', 'Time to First Byte — measures server response speed'),
+              SpeedIndex: getVital('speed-index', 'Speed Index — how quickly content is visually displayed'),
+            },
+            opportunities: opportunities.slice(0, 6),
+            diagnostics: [],
+            fetchedAt: new Date().toISOString(),
+          }
+        } catch (psErr) {
+          console.error('PageSpeed fetch failed:', psErr.message)
+        }
+
+        const result = { ...response.data, pageSpeed: pageSpeedData }
         localStorage.removeItem('auditPending')
         // Sanitize data before storing in localStorage
-        const sanitizedData = sanitizeUserData(response.data)
+        const sanitizedData = sanitizeUserData(result)
         localStorage.setItem('auditResult', JSON.stringify(sanitizedData))
         setTimeout(() => navigate('/report'), 800)
       })
