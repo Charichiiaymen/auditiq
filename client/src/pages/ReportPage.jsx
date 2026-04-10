@@ -141,6 +141,11 @@ function PriorityMatrix({ issues }) {
                   fillOpacity="0.85"
                   stroke="#0f172a"
                   strokeWidth="0.5"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => {
+                    const el = document.getElementById(`issue-${i}`)
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  }}
                 />
               </g>
             )
@@ -178,11 +183,17 @@ export default function ReportPage() {
 
   const { seo, technical, content, social, issues = [], recommendations = [], pageSpeed, crawl } = result
 
-  const overallScore = Math.round((seo.score + technical.score + content.score + social.score) / 4)
+  const overallScore = Math.round(
+    seo.score * 0.4 +
+    technical.score * 0.3 +
+    content.score * 0.2 +
+    social.score * 0.1
+  )
 
-  const criticalCount = issues.filter(i => i.severity === 'Critical').length
-  const highCount = issues.filter(i => i.severity === 'High').length
-  const quickWins = issues.filter(i => i.effort === 'Quick Win').length
+  const actionableIssues = issues.filter(i => i.severity !== 'Informational')
+  const criticalCount = actionableIssues.filter(i => i.severity === 'Critical').length
+  const highCount = actionableIssues.filter(i => i.severity === 'High').length
+  const quickWins = actionableIssues.filter(i => i.effort === 'Quick Win').length
 
   const severityOrder = { Critical: 0, High: 1, Medium: 2, Low: 3, Informational: 4 }
   const filters = ['All', 'Critical', 'High', 'Medium', 'Low', 'Informational']
@@ -695,7 +706,7 @@ async function handleExportPDF() {
               <div>
                 <p className="text-slate-400 text-xs mb-1">Overall Score</p>
                 <p className={`text-lg font-bold ${scoreCls(overallScore)}`}>{scoreLabel(overallScore)}</p>
-                <p className="text-slate-500 text-xs mt-1">{issues.length} issues detected</p>
+                <p className="text-slate-500 text-xs mt-1">{actionableIssues.length} actionable issues detected</p>
               </div>
             </Card>
 
@@ -815,7 +826,7 @@ async function handleExportPDF() {
               const cfg = severityConfig[issue.severity] || severityConfig.Informational
               const isExpanded = expandedIssue === i
               return (
-                <div key={i} className={`rounded-xl border p-4 cursor-pointer transition-all ${cfg.bg}`}
+                <div key={i} id={`issue-${i}`} className={`rounded-xl border p-4 cursor-pointer transition-all ${cfg.bg}`}
                   onClick={() => setExpandedIssue(isExpanded ? null : i)}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 flex-1">

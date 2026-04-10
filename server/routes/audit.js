@@ -352,18 +352,31 @@ function scoreContent(contentData) {
 }
 
 // ─── STEP 9: Social Audit ──────────────────────────────────────────────────
-function auditSocial(instagram, facebook) {
-  const instagramProvided = typeof instagram === 'string' && instagram.trim().length > 0;
+function auditSocial(instagram, facebook, html) {
+  const $ = cheerio.load(html)
+  const pageText = $('body').html() || ''
+
+  const instagramProvided = typeof instagram === 'string' && instagram.trim().length > 0
   const instagramHandleValid = instagramProvided
     ? /^@?[a-zA-Z0-9_.]{1,30}$/.test(instagram.trim())
-    : false;
+    : false
 
-  const facebookProvided = typeof facebook === 'string' && facebook.trim().length > 0;
+  const facebookProvided = typeof facebook === 'string' && facebook.trim().length > 0
   const facebookURLValid = facebookProvided
     ? /^https?:\/\/(www\.)?facebook\.com\/.+/.test(facebook.trim())
-    : false;
+    : false
 
-  const bothProvided = instagramProvided && facebookProvided;
+  const bothProvided = instagramProvided && facebookProvided
+
+  // Check if social links actually appear on the page
+  const instagramHandle = instagram.replace('@', '').toLowerCase().trim()
+  const instagramOnPage = instagramProvided
+    ? pageText.toLowerCase().includes('instagram.com/' + instagramHandle) || pageText.toLowerCase().includes(instagramHandle)
+    : false
+
+  const facebookOnPage = facebookProvided
+    ? pageText.toLowerCase().includes(facebook.trim().toLowerCase())
+    : false
 
   return {
     instagramProvided,
@@ -371,25 +384,20 @@ function auditSocial(instagram, facebook) {
     facebookProvided,
     facebookURLValid,
     bothProvided,
-  };
+    instagramOnPage,
+    facebookOnPage,
+  }
 }
 
 // ─── Score Social ─────────────────────────────────────────────────
 function scoreSocial(socialData) {
-  let score = 0;
-
-  // Instagram (40 pts)
-  if (socialData.instagramProvided) score += 20;
-  if (socialData.instagramHandleValid) score += 20;
-
-  // Facebook (40 pts)
-  if (socialData.facebookProvided) score += 20;
-  if (socialData.facebookURLValid) score += 20;
-
-  // Both provided bonus (20 pts)
-  if (socialData.bothProvided) score += 20;
-
-  return Math.min(score, 100);
+  let score = 0
+  if (socialData.instagramProvided && socialData.instagramHandleValid) score += 20
+  if (socialData.instagramOnPage) score += 10
+  if (socialData.facebookProvided && socialData.facebookURLValid) score += 20
+  if (socialData.facebookOnPage) score += 10
+  if (socialData.bothProvided) score += 40
+  return score
 }
 
 // ─── Issue Severity Triage ─────────────────────────────────────────────────
@@ -712,6 +720,23 @@ function triageIssues(seoData, techData, contentData, socialData) {
     effort: 'Medium',
   })
 
+  // Keyword over-optimization warning
+  if (seoData.topKeywords && seoData.topKeywords.length > 0) {
+    const overOptimized = seoData.topKeywords.filter(k => k.density > 3)
+    if (overOptimized.length > 0) {
+      issues.push({
+        severity: 'Medium',
+        impact: 'Medium',
+        pillar: 'SEO',
+        code: 'KEYWORD_STUFFING',
+        title: `Keyword over-optimization detected: "${overOptimized[0].word}" at ${overOptimized[0].density}%`,
+        detail: 'Keyword density above 3% is considered stuffing by Google and can trigger a penalty. Modern SEO favors natural language over repeated keywords.',
+        fix: 'Reduce keyword repetition. Aim for 1-2% density. Use synonyms and related terms instead.',
+        effort: 'Medium',
+      })
+    }
+  }
+
   return issues
 }
 
@@ -732,7 +757,7 @@ router.post('/audit', async (req, res) => {
       Promise.resolve(auditContent(html)),
     ]);
 
-    const socialData = auditSocial(instagram, facebook);
+    const socialData = auditSocial(instagram, facebook, html);
 
     const seoScore = scoreSEO(seoData);
     const technicalScore = scoreTechnical(techData);
@@ -747,6 +772,12 @@ router.post('/audit', async (req, res) => {
       content: { ...contentData, score: contentScore },
       social: { ...socialData, score: socialScore },
     };
+    result.overallScore = Math.round(
+      seoScore * 0.4 +
+      technicalScore * 0.3 +
+      contentScore * 0.2 +
+      socialScore * 0.1
+    );
 
     const [recommendations, pageSpeed, crawlData] = await Promise.all([
       generateRecommendations(result),
