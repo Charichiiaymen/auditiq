@@ -3,17 +3,36 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { removeStopwords, eng, fra } = require('stopword');
 const { generateRecommendations } = require('../services/aiRecommender');
+const { crawlSite, fetchPageSafe } = require('../services/multiPageCrawler');
+const { extractVisibleContent, recalculateWordCount } = require('../services/contentExtractor');
 const { getPageSpeedData } = require('../services/pageSpeed');
-const { crawlSite } = require('../services/multiPageCrawler');
 
 const router = express.Router();
+
+// ─── SSRF Protection ────────────────────────────────────────────────────────
+function isValidAuditUrl(url) {
+  try {
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false
+    const host = parsed.hostname
+    // Block localhost and loopback
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false
+    // Block private/link-local/metadata IPs
+    if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false
+    if (/^169\.254\./.test(host)) return false
+    if (host.startsWith('0.')) return false
+    return true
+  } catch {
+    return false
+  }
+}
 
 // ─── Advanced Keyword Extraction ───────────────────────────────────────────
 function extractKeywords(text) {
   // Remove HTML entities and extra whitespace
   let cleanText = text.replace(/&[a-z]+;/gi, ' ') // Remove HTML entities like &nbsp;
                      .replace(/<[^>]*>/g, ' ')    // Remove any remaining HTML tags
-                     .replace(/[^\w\s]/gi, ' ')   // Remove punctuation
+                     .replace(/[^\w\s]/gi, ' ')   // Replace punctuation with spaces (prevents word merging)
                      .replace(/\s+/g, ' ')        // Normalize whitespace
                      .trim()
                      .toLowerCase();
@@ -23,6 +42,22 @@ function extractKeywords(text) {
 
   // Remove stopwords using both English and French dictionaries
   words = removeStopwords(words, [...eng, ...fra]);
+
+  // Supplementary stopwords missed by the standard dictionary
+  const extraStops = new Set([
+    // Common function words missing from stopword lib
+    'without', 'within', 'upon', 'among', 'throughout', 'therefore',
+    'however', 'whether', 'although', 'unless', 'towards', 'besides',
+    'onto', 'per', 'via', 'vs', 'else', 'enough', 'rather', 'since',
+    'though', 'yet', 'already', 'always', 'never', 'often', 'sometimes',
+    // Common verbs and auxiliaries
+    'use', 'used', 'using', 'also', 'well', 'may', 'like', 'get', 'got',
+    'way', 'ways', 'make', 'makes', 'made', 'let', 'new', 'one', 'two',
+    'need', 'needs', 'want', 'set', 'see', 'look', 'go', 'going', 'come',
+    'know', 'take', 'many', 'much', 'say', 'said', 'find', 'found', 'give',
+    'back', 'still', 'also',
+  ]);
+  words = words.filter(w => !extraStops.has(w));
 
   // Further filter to ensure quality keywords
   words = words.filter(w => {
@@ -49,21 +84,6 @@ function extractKeywords(text) {
   }));
 
   return topKeywords;
-}
-
-// ─── STEP 1: Fetch the page HTML ───────────────────────────────────────────
-async function fetchPage(url) {
-  try {
-    const response = await axios.get(url, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; AuditIQ/1.0)',
-      },
-    });
-    return response.data;
-  } catch (err) {
-    throw new Error('Failed to fetch URL: ' + err.message);
-  }
 }
 
 // ─── STEP 2: SEO Audit ─────────────────────────────────────────────────────
@@ -120,6 +140,8 @@ function auditSEO(html, url) {
   })
 
   // ── Keyword Analysis ───────────────────────────────────────
+  // Add spaces after block elements to prevent word merging (e.g. "DomainThis")
+  ;['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'li', 'br', 'hr', 'section', 'article', 'main', 'header', 'footer', 'nav', 'aside', 'blockquote', 'pre', 'tr', 'dt', 'dd'].forEach(tag => { $(tag).append(' ') })
   const bodyText = $('body').text()
   const topKeywords = extractKeywords(bodyText)
 
@@ -168,7 +190,8 @@ function auditSEO(html, url) {
 
   // ── Content signals ────────────────────────────────────────
   const paragraphCount = $('p').length
-  const wordCount = words.length
+  const cleanContent = extractVisibleContent($.html())
+  const wordCount = recalculateWordCount(cleanContent)
   const hasCTA = ['buy','order','subscribe','sign up','get started','contact','book','demo','try','download','shop now','learn more','get a quote'].some(kw => bodyText.includes(kw))
   const hasPhoneNumber = /(\+?\d[\d\s\-().]{7,}\d)/.test($('body').text())
   const hasEmail = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.test($('body').text())
@@ -220,13 +243,22 @@ function auditTechnical(html, url) {
   const scriptCount = $('script').length;
   const stylesheetCount = $('link[rel="stylesheet"]').length;
   const hasStructuredData = $('script[type="application/ld+json"]').length > 0;
+  const inlineScripts = $('script:not([src])').length;
+  const inlineStyles = $('style').length;
+  const ogTitle = $('meta[property="og:title"]').attr('content') || '';
+  const ogDescription = $('meta[property="og:description"]').attr('content') || '';
+  const ogImage = $('meta[property="og:image"]').attr('content') || '';
+  const hasCompleteOG = !!(ogTitle && ogDescription && ogImage);
 
   return {
     isHTTPS,
     hasViewportMeta,
     hasOpenGraph,
+    hasCompleteOG,
     scriptCount,
     stylesheetCount,
+    inlineScripts,
+    inlineStyles,
     hasStructuredData,
   };
 }
@@ -278,7 +310,7 @@ function scoreSEO(seoData) {
 }
 
 // ─── Score Technical ───────────────────────────────────────────────
-function scoreTechnical(techData) {
+function scoreTechnical(techData, pageSpeedData) {
   let score = 0;
 
   // HTTPS (20 pts)
@@ -305,6 +337,21 @@ function scoreTechnical(techData) {
   if (techData.inlineScripts === 0) score += 5;
   if (techData.inlineStyles === 0) score += 5;
 
+  // PageSpeed Core Web Vitals Influence (20 pts)
+  if (pageSpeedData) {
+    const cwv = pageSpeedData.coreWebVitals || {};
+
+    // LCP influence (10 pts)
+    const lcpScore = cwv.LCP?.score || 0;
+    if (lcpScore >= 0.9) score += 10;
+    else if (lcpScore >= 0.5) score += 5;
+
+    // Speed Index influence (10 pts)
+    const speedIndexScore = cwv.SpeedIndex?.score || 0;
+    if (speedIndexScore >= 0.9) score += 10;
+    else if (speedIndexScore >= 0.5) score += 5;
+  }
+
   return Math.min(score, 100);
 }
 
@@ -313,10 +360,12 @@ function auditContent(html) {
   const $ = cheerio.load(html);
 
   // ── Keyword Analysis ───────────────────────────────────────
+  ;['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'li', 'br', 'hr', 'section', 'article', 'main', 'header', 'footer', 'nav', 'aside', 'blockquote', 'pre', 'tr', 'dt', 'dd'].forEach(tag => { $(tag).append(' ') })
   const bodyText = $('body').text();
   const topKeywords = extractKeywords(bodyText);
 
-  const wordCount = $('body').text().split(/\s+/).filter(w => w.length > 0).length;
+  const cleanContent = extractVisibleContent(html);
+  const wordCount = recalculateWordCount(cleanContent);
 
   const ctaKeywords = ['buy', 'order', 'subscribe', 'sign up', 'get started', 'contact', 'book', 'demo', 'try', 'download', 'shop now', 'learn more', 'get a quote'];
   const bodyLower = bodyText.toLowerCase();
@@ -768,16 +817,352 @@ function triageIssues(seoData, techData, contentData, socialData) {
   return issues
 }
 
-// ─── STEP 6: Route Handler ─────────────────────────────────────────────────
+// ─── Inject PageSpeed Performance Issues ───────────────────────────────────────
+function injectPageSpeedIssues(issues, pageSpeedData) {
+  if (!pageSpeedData || !pageSpeedData.coreWebVitals) return issues;
+
+  const vitals = pageSpeedData.coreWebVitals;
+  const newIssues = [...issues];
+
+  // LCP (Largest Contentful Paint) - Loading Performance
+  if (vitals.LCP) {
+    const lcpScore = vitals.LCP.score || 0;
+    const lcpValue = vitals.LCP.value || 'N/A';
+
+    if (lcpScore < 0.5) { // Poor performance
+      newIssues.push({
+        severity: 'Critical',
+        impact: 'High',
+        pillar: 'Performance',
+        code: 'LCP_POOR',
+        title: `Critical LCP Issue: ${lcpValue}`,
+        detail: `Largest Contentful Paint (LCP) measures loading performance. Your LCP is poor (${lcpValue}), meaning your page loads slowly. This directly impacts user experience and search rankings.`,
+        fix: 'Optimize largest images, preload critical resources, defer non-critical JavaScript, optimize CSS delivery, and consider lazy loading below-the-fold images.',
+        effort: 'Complex',
+        impactScore: 9, // High impact
+        effortScore: 8, // High effort
+      });
+    } else if (lcpScore < 0.9) { // Needs Improvement
+      newIssues.push({
+        severity: 'High',
+        impact: 'Medium',
+        pillar: 'Performance',
+        code: 'LCP_NI',
+        title: `LCP Needs Improvement: ${lcpValue}`,
+        detail: `Largest Contentful Paint (LCP) measures loading performance. Your LCP needs improvement (${lcpValue}). This could negatively impact user experience and search rankings.`,
+        fix: 'Consider image optimization, CSS optimization, and reducing server response times.',
+        effort: 'Medium',
+        impactScore: 7, // Medium-high impact
+        effortScore: 6, // Medium effort
+      });
+    }
+  }
+
+  // CLS (Cumulative Layout Shift) - Visual Stability
+  if (vitals.CLS) {
+    const clsScore = vitals.CLS.score || 0;
+    const clsValue = vitals.CLS.value || 'N/A';
+
+    if (clsScore < 0.5) { // Poor stability
+      newIssues.push({
+        severity: 'Critical',
+        impact: 'High',
+        pillar: 'Performance',
+        code: 'CLS_POOR',
+        title: `Critical CLS Issue: ${clsValue}`,
+        detail: `Cumulative Layout Shift (CLS) measures visual stability. Your CLS is poor (${clsValue}), causing elements to shift unexpectedly during page load. This frustrates users and hurts conversions.`,
+        fix: 'Reserve space for ads, images, and embeds. Avoid inserting content above existing content. Use transform animations instead of changing layout properties.',
+        effort: 'Medium',
+        impactScore: 8, // High impact
+        effortScore: 7, // Medium-high effort
+      });
+    } else if (clsScore < 0.9) { // Needs Improvement
+      newIssues.push({
+        severity: 'High',
+        impact: 'Medium',
+        pillar: 'Performance',
+        code: 'CLS_NI',
+        title: `CLS Needs Improvement: ${clsValue}`,
+        detail: `Cumulative Layout Shift (CLS) measures visual stability. Your CLS needs improvement (${clsValue}). Minor layout shifts can still impact user experience.`,
+        fix: 'Specify dimensions for media elements and ensure web fonts load efficiently.',
+        effort: 'Medium',
+        impactScore: 6, // Medium impact
+        effortScore: 5, // Medium effort
+      });
+    }
+  }
+
+  // TBT (Total Blocking Time) - Interactivity
+  if (vitals.TBT) {
+    const tbtScore = vitals.TBT.score || 0;
+    const tbtValue = vitals.TBT.value || 'N/A';
+
+    if (tbtScore < 0.5) { // Poor interactivity
+      newIssues.push({
+        severity: 'Critical',
+        impact: 'High',
+        pillar: 'Performance',
+        code: 'TBT_POOR',
+        title: `Critical TBT Issue: ${tbtValue}`,
+        detail: `Total Blocking Time (TBT) measures interactivity. Your TBT is poor (${tbtValue}), meaning your page is unresponsive during load. This directly impacts user satisfaction and search rankings.`,
+        fix: 'Break up long tasks, optimize JavaScript execution time, and reduce DOM size.',
+        effort: 'Complex',
+        impactScore: 8, // High impact
+        effortScore: 7, // Medium-high effort
+      });
+    } else if (tbtScore < 0.9) { // Needs Improvement
+      newIssues.push({
+        severity: 'High',
+        impact: 'Medium',
+        pillar: 'Performance',
+        code: 'TBT_NI',
+        title: `TBT Needs Improvement: ${tbtValue}`,
+        detail: `Total Blocking Time (TBT) measures interactivity. Your TBT needs improvement (${tbtValue}). Some delays in page responsiveness may frustrate users.`,
+        fix: 'Minimize JavaScript payloads and optimize parsing.',
+        effort: 'Medium',
+        impactScore: 6, // Medium impact
+        effortScore: 6, // Medium effort
+      });
+    }
+  }
+
+  // FID (First Input Delay) - Real-world interactivity
+  if (vitals.FID) {
+    const fidScore = vitals.FID.score || 0;
+    const fidValue = vitals.FID.value || 'N/A';
+
+    if (fidScore < 0.5) { // Poor interactivity
+      newIssues.push({
+        severity: 'High',
+        impact: 'High',
+        pillar: 'Performance',
+        code: 'FID_POOR',
+        title: `FID Issue: ${fidValue}`,
+        detail: `First Input Delay (FID) measures real-world interactivity. Your FID is poor (${fidValue}), meaning users experience delays when interacting with your page.`,
+        fix: 'Reduce JavaScript execution time and break up long tasks.',
+        effort: 'Medium',
+        impactScore: 7, // High impact
+        effortScore: 6, // Medium effort
+      });
+    }
+  }
+
+  // FCP (First Contentful Paint) - Visual readiness
+  if (vitals.FCP) {
+    const fcpScore = vitals.FCP.score || 0;
+    const fcpValue = vitals.FCP.value || 'N/A';
+
+    if (fcpScore < 0.5) {
+      newIssues.push({
+        severity: 'Critical',
+        impact: 'High',
+        pillar: 'Performance',
+        code: 'FCP_POOR',
+        title: `Critical FCP Issue: ${fcpValue}`,
+        detail: `First Contentful Paint (FCP) measures when the first content appears. Your FCP is poor (${fcpValue}), meaning users stare at a blank screen for too long.`,
+        fix: 'Reduce server response times, eliminate render-blocking resources, and optimize critical CSS.',
+        effort: 'Medium',
+        impactScore: 8,
+        effortScore: 6,
+      });
+    } else if (fcpScore < 0.9) {
+      newIssues.push({
+        severity: 'Medium',
+        impact: 'Medium',
+        pillar: 'Performance',
+        code: 'FCP_NI',
+        title: `FCP Needs Improvement: ${fcpValue}`,
+        detail: `First Contentful Paint needs improvement (${fcpValue}). Users may notice a delay before content appears.`,
+        fix: 'Inline critical CSS, defer non-essential scripts, and optimize server response times.',
+        effort: 'Quick Win',
+        impactScore: 5,
+        effortScore: 4,
+      });
+    }
+  }
+
+  // TTFB (Time to First Byte) - Server response
+  if (vitals.TTFB) {
+    const ttfbScore = vitals.TTFB.score || 0;
+    const ttfbValue = vitals.TTFB.value || 'N/A';
+
+    if (ttfbScore < 0.5) {
+      newIssues.push({
+        severity: 'High',
+        impact: 'High',
+        pillar: 'Performance',
+        code: 'TTFB_POOR',
+        title: `Slow Server Response: ${ttfbValue}`,
+        detail: `Time to First Byte (TTFB) measures server response speed. Your TTFB is poor (${ttfbValue}), meaning the server takes too long to start sending data.`,
+        fix: 'Use a CDN, optimize database queries, upgrade hosting, or implement server-side caching.',
+        effort: 'Medium',
+        impactScore: 8,
+        effortScore: 5,
+      });
+    } else if (ttfbScore < 0.9) {
+      newIssues.push({
+        severity: 'Medium',
+        impact: 'Medium',
+        pillar: 'Performance',
+        code: 'TTFB_NI',
+        title: `TTFB Needs Improvement: ${ttfbValue}`,
+        detail: `Time to First Byte needs improvement (${ttfbValue}). Server response could be faster.`,
+        fix: 'Enable server caching, use a CDN, and optimize backend processing.',
+        effort: 'Quick Win',
+        impactScore: 5,
+        effortScore: 3,
+      });
+    }
+  }
+
+  // Speed Index - Visual Load Speed
+  if (vitals.SpeedIndex) {
+    const siScore = vitals.SpeedIndex.score || 0;
+    const siValue = vitals.SpeedIndex.value || 'N/A';
+
+    if (siScore < 0.5) { // Poor visual load
+      newIssues.push({
+        severity: 'High',
+        impact: 'Medium',
+        pillar: 'Performance',
+        code: 'SPEED_INDEX_POOR',
+        title: `Speed Index Issue: ${siValue}`,
+        detail: `Speed Index measures how quickly content is visually displayed. Your Speed Index is poor (${siValue}), indicating slow visual loading that impacts user perception.`,
+        fix: 'Optimize images, reduce render-blocking resources, and improve server response times.',
+        effort: 'Medium',
+        impactScore: 6, // Medium impact
+        effortScore: 6, // Medium effort
+      });
+    }
+  }
+
+  return newIssues;
+}
+
+// ─── STEP 6: Route Handlers ─────────────────────────────────────────────────
+
+// Helper: fast audit (scrape + score + issues — no crawl, no AI)
+async function performFastAudit(url, instagram, facebook) {
+  const html = await fetchPageSafe(url);
+  if (!html) {
+    const err = new Error('Failed to fetch the provided URL. The site may be down or blocking automated access.');
+    err.status = 502;
+    throw err;
+  }
+
+  const [seoData, techData, contentData] = await Promise.all([
+    Promise.resolve(auditSEO(html, url)),
+    Promise.resolve(auditTechnical(html, url)),
+    Promise.resolve(auditContent(html)),
+  ]);
+
+  const socialData = auditSocial(instagram, facebook, html);
+
+  const seoScore = scoreSEO(seoData);
+  const technicalScore = scoreTechnical(techData, null);
+  const contentScore = scoreContent(contentData);
+  const socialScore = scoreSocial(socialData);
+
+  const overallScore = Math.round(
+    seoScore * 0.4 +
+    technicalScore * 0.3 +
+    contentScore * 0.2 +
+    socialScore * 0.1
+  );
+
+  const issues = triageIssues(seoData, techData, contentData, socialData);
+
+  return {
+    url,
+    timestamp: new Date().toISOString(),
+    seo: { ...seoData, score: seoScore },
+    technical: { ...techData, score: technicalScore },
+    content: { ...contentData, score: contentScore },
+    social: { ...socialData, score: socialScore },
+    overallScore,
+    issues,
+  };
+}
+
+// Helper: deep audit (crawl + AI recommendations — requires html context from fast)
+async function performDeepAudit(url, html, fastResult) {
+  const [recommendations, crawlData] = await Promise.all([
+    generateRecommendations({ ...fastResult, html }),
+    crawlSite(url, html),
+  ]);
+
+  return {
+    recommendations,
+    crawl: crawlData,
+  };
+}
+
+// POST /api/audit/fast — Scrape, score, and triage (under 10s)
+router.post('/audit/fast', async (req, res) => {
+  const { url, instagram = '', facebook = '' } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+  if (!isValidAuditUrl(url)) {
+    return res.status(400).json({ error: 'Invalid URL. Only public HTTP/HTTPS URLs are allowed.' });
+  }
+
+  try {
+    const result = await performFastAudit(url, instagram, facebook);
+    // Store html on result so /deep can skip re-fetching
+    result._html = undefined; // Don't send HTML to client (large payload)
+    return res.json(result);
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// POST /api/audit/deep — Crawl + AI recommendations (slower, adds to fast result)
+router.post('/audit/deep', async (req, res) => {
+  const { url, instagram = '', facebook = '', fastResult } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+  if (!isValidAuditUrl(url)) {
+    return res.status(400).json({ error: 'Invalid URL. Only public HTTP/HTTPS URLs are allowed.' });
+  }
+  if (!fastResult) {
+    return res.status(400).json({ error: 'fastResult is required' });
+  }
+
+  try {
+    const html = await fetchPageSafe(url);
+    if (!html) {
+      const err = new Error('Failed to fetch the provided URL. The site may be down or blocking automated access.');
+      err.status = 502;
+      throw err;
+    }
+
+    const deepData = await performDeepAudit(url, html, fastResult);
+    return res.json(deepData);
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// POST /api/audit — Original combined endpoint (backwards compatible)
 router.post('/audit', async (req, res) => {
   const { url, instagram = '', facebook = '' } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
+  if (!isValidAuditUrl(url)) {
+    return res.status(400).json({ error: 'Invalid URL. Only public HTTP/HTTPS URLs are allowed.' });
+  }
 
   try {
-    const html = await fetchPage(url);
+    const html = await fetchPageSafe(url);
+    if (!html) {
+      return res.status(502).json({ error: 'Failed to fetch the provided URL. The site may be down or blocking automated access.' });
+    }
 
     const [seoData, techData, contentData] = await Promise.all([
       Promise.resolve(auditSEO(html, url)),
@@ -788,9 +1173,18 @@ router.post('/audit', async (req, res) => {
     const socialData = auditSocial(instagram, facebook, html);
 
     const seoScore = scoreSEO(seoData);
-    const technicalScore = scoreTechnical(techData);
+    // PageSpeed scoring is done client-side after frontend fetches PageSpeed data
+    const technicalScore = scoreTechnical(techData, null);
     const contentScore = scoreContent(contentData);
     const socialScore = scoreSocial(socialData);
+
+    // Calculate weighted overall score (will be adjusted by frontend after PageSpeed)
+    let overallScore = Math.round(
+      seoScore * 0.4 +
+      technicalScore * 0.3 +
+      contentScore * 0.2 +
+      socialScore * 0.1
+    );
 
     const result = {
       url,
@@ -799,26 +1193,44 @@ router.post('/audit', async (req, res) => {
       technical: { ...techData, score: technicalScore },
       content: { ...contentData, score: contentScore },
       social: { ...socialData, score: socialScore },
+      overallScore: overallScore,
     };
-    result.overallScore = Math.round(
-      seoScore * 0.4 +
-      technicalScore * 0.3 +
-      contentScore * 0.2 +
-      socialScore * 0.1
-    );
 
-    const [recommendations, pageSpeed, crawlData] = await Promise.all([
-      generateRecommendations(result),
-      getPageSpeedData(url),
+    const [recommendations, crawlData] = await Promise.all([
+      generateRecommendations({ ...result, html }),
       crawlSite(url, html),
     ]);
+
     const issues = triageIssues(seoData, techData, contentData, socialData);
+    // PageSpeed issues will be injected client-side after frontend PageSpeed fetch
+
     result.recommendations = recommendations;
     result.issues = issues;
-    result.pageSpeed = pageSpeed;
     result.crawl = crawlData;
 
     return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/audit/pagespeed — PageSpeed Insights proxy (keeps API key server-side)
+router.post('/audit/pagespeed', async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+  if (!isValidAuditUrl(url)) {
+    return res.status(400).json({ error: 'Invalid URL. Only public HTTP/HTTPS URLs are allowed.' });
+  }
+
+  try {
+    const pageSpeedData = await getPageSpeedData(url);
+    if (!pageSpeedData) {
+      return res.json({ pageSpeed: null, warning: 'PageSpeed data unavailable. The rest of the audit is still valid.' });
+    }
+    return res.json({ pageSpeed: pageSpeedData });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

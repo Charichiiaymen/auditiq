@@ -68,10 +68,31 @@ function Card({ children, className = '' }) {
 }
 
 function PriorityMatrix({ issues }) {
-  const filtered = issues.filter(i => i.severity !== 'Informational' && i.effort && i.impact)
+  const filtered = issues.filter(i => i.severity !== 'Informational' && (i.effort || i.effortScore) && (i.impact || i.impactScore))
 
+  // Map effort categories to X positions (0-100 scale)
   const effortX = { 'Quick Win': 20, 'Medium': 50, 'Complex': 80 }
+
+  // Map impact categories to Y positions (0-100 scale)
   const impactY = { 'Low': 80, 'Medium': 50, 'High': 20 }
+
+  // Map numeric scores to positions
+  const getEffortPosition = (issue) => {
+    if (issue.effortScore !== undefined) {
+      // Normalize 0-10 scale to 0-100 scale
+      return Math.max(10, Math.min(90, issue.effortScore * 10))
+    }
+    return effortX[issue.effort] || 50
+  }
+
+  const getImpactPosition = (issue) => {
+    if (issue.impactScore !== undefined) {
+      // Normalize 0-10 scale to 0-100 scale (inverted because Y=0 is top)
+      return 100 - Math.max(10, Math.min(90, issue.impactScore * 10))
+    }
+    return impactY[issue.impact] || 50
+  }
+
   const severityColor = {
     Critical: '#f87171',
     High: '#fb923c',
@@ -126,8 +147,14 @@ function PriorityMatrix({ issues }) {
 
           {/* Issue dots */}
           {filtered.map((issue, i) => {
-            const cx = 10 + (effortX[issue.effort] || 50)
-            const cy = 5 + (impactY[issue.impact] || 50)
+            // Calculate X position (effort axis: left = easy, right = hard)
+            const effortPos = getEffortPosition(issue)
+            const cx = 10 + (effortPos * 0.8) // Scale to fit within 10-90 range
+
+            // Calculate Y position (impact axis: top = high, bottom = low)
+            const impactPos = getImpactPosition(issue)
+            const cy = 5 + (impactPos * 0.95) // Scale to fit within 5-100 range
+
             const jitterX = ((i * 7) % 14) - 7
             const jitterY = ((i * 11) % 14) - 7
             const color = severityColor[issue.severity] || '#94a3b8'
@@ -176,24 +203,43 @@ export default function ReportPage() {
   useEffect(() => {
     const stored = localStorage.getItem('auditResult')
     if (!stored) { navigate('/'); return }
-    setResult(JSON.parse(stored))
+    try {
+      setResult(JSON.parse(stored))
+    } catch {
+      localStorage.removeItem('auditResult')
+      navigate('/')
+      return
+    }
   }, [navigate])
 
   if (!result) return null
 
-  const { seo, technical, content, social, issues = [], recommendations = [], pageSpeed, crawl } = result
+  // ─── Safe result normalizer ────────────────────────────────────────────────
+  const safeResult = {
+    seo: { score: 0, ...result.seo },
+    technical: { score: 0, ...result.technical },
+    content: { score: 0, ...result.content },
+    social: { score: 0, ...result.social },
+    issues: result.issues || [],
+    recommendations: result.recommendations || [],
+    overallScore: result.overallScore || 0,
+    crawl: result.crawl || null,
+    pageSpeed: result.pageSpeed || null,
+    _pageSpeedWarning: result._pageSpeedWarning || null,
+    _deepWarning: result._deepWarning || null,
+  }
 
-  const overallScore = Math.round(
-    seo.score * 0.4 +
-    technical.score * 0.3 +
-    content.score * 0.2 +
-    social.score * 0.1
-  )
+  const { seo, technical, content, social, issues = [], recommendations = [], pageSpeed, crawl, overallScore } = safeResult
+  const pageSpeedWarning = safeResult._pageSpeedWarning
+  const deepWarning = safeResult._deepWarning
 
   const actionableIssues = issues.filter(i => i.severity !== 'Informational')
   const criticalCount = actionableIssues.filter(i => i.severity === 'Critical').length
   const highCount = actionableIssues.filter(i => i.severity === 'High').length
-  const quickWins = actionableIssues.filter(i => i.effort === 'Quick Win').length
+  const quickWins = actionableIssues.filter(i =>
+    i.effort === 'Quick Win' ||
+    (i.effortScore !== undefined && i.effortScore <= 3)
+  ).length
 
   const severityOrder = { Critical: 0, High: 1, Medium: 2, Low: 3, Informational: 4 }
   const filters = ['All', 'Critical', 'High', 'Medium', 'Low', 'Informational']
@@ -206,6 +252,11 @@ export default function ReportPage() {
     { name: 'Content', score: content.score },
     { name: 'Social', score: social.score },
   ]
+
+  // Add Performance score if available
+  if (pageSpeed && pageSpeed.performanceScore !== undefined) {
+    pillars.push({ name: 'Performance', score: pageSpeed.performanceScore });
+  }
 
   const scoreColor = (s) => s >= 75 ? '#4ade80' : s >= 50 ? '#facc15' : '#f87171'
   const scoreLabel = (s) => s >= 75 ? 'Good' : s >= 50 ? 'Needs Improvement' : 'Critical'
@@ -314,7 +365,12 @@ async function handleExportPDF() {
         { name: 'Content Quality', score: content.score },
         { name: 'Social Presence', score: social.score },
       ]
-      const cW = (col-6)/4
+
+      // Add Performance score if available
+      if (safeResult.pageSpeed && safeResult.pageSpeed.performanceScore !== undefined) {
+        cardData.push({ name: 'Performance', score: safeResult.pageSpeed.performanceScore });
+      }
+      const cW = (col-6)/(cardData.length > 4 ? cardData.length : 4)
       cardData.forEach((p, i) => {
         const x = M + i*(cW+2)
         fc('#1e293b'); dc('#334155')
@@ -384,7 +440,7 @@ async function handleExportPDF() {
       }
 
       // Core Web Vitals
-      if(pageSpeed) {
+      if(pageSpeed && pageSpeed.coreWebVitals) {
         sectionHeader('Core Web Vitals & Performance')
 
         // Lighthouse scores
@@ -754,8 +810,28 @@ async function handleExportPDF() {
           </Card>
         </Section>
 
+        {/* Warning Banners */}
+        {pageSpeedWarning && (
+          <div className="w-full bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 flex items-start gap-3">
+            <span className="text-yellow-400 text-lg shrink-0">⚠</span>
+            <div>
+              <p className="text-yellow-400 text-sm font-semibold">PageSpeed Data Unavailable</p>
+              <p className="text-slate-400 text-xs mt-1">{pageSpeedWarning}</p>
+            </div>
+          </div>
+        )}
+        {deepWarning && (
+          <div className="w-full bg-orange-500/10 border border-orange-500/30 rounded-xl p-4 flex items-start gap-3">
+            <span className="text-orange-400 text-lg shrink-0">⚠</span>
+            <div>
+              <p className="text-orange-400 text-sm font-semibold">Recommendations Unavailable</p>
+              <p className="text-slate-400 text-xs mt-1">{deepWarning}</p>
+            </div>
+          </div>
+        )}
+
         {/* Core Web Vitals */}
-        {pageSpeed && (
+        {pageSpeed && pageSpeed.coreWebVitals && (
           <Section title="Core Web Vitals & Performance">
             {/* Lighthouse Scores */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
@@ -841,8 +917,16 @@ async function handleExportPDF() {
                               {issue.effort}
                             </span>
                           )}
+                          {issue.effortScore !== undefined && (
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${effortConfig.Medium || ''}`}>
+                              Effort: {issue.effortScore}/10
+                            </span>
+                          )}
                           {issue.impact && (
                             <span className="text-xs text-slate-600">Impact: {issue.impact}</span>
+                          )}
+                          {issue.impactScore !== undefined && (
+                            <span className="text-xs text-slate-600">Impact: {issue.impactScore}/10</span>
                           )}
                         </div>
                         <p className="text-white text-sm font-medium">{issue.title}</p>

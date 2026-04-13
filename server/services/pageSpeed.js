@@ -2,9 +2,7 @@ const axios = require('axios')
 
 async function getPageSpeedData(url) {
   const apiKey = process.env.PAGESPEED_API_KEY
-  console.log('getPageSpeedData called with URL:', url);
   if (!apiKey) {
-    console.log('No PAGESPEED_API_KEY set — skipping PageSpeed analysis')
     return null
   }
 
@@ -19,10 +17,8 @@ async function getPageSpeedData(url) {
     params.append('category', 'best-practices')
     params.append('category', 'accessibility')
     const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params.toString()}`
-    console.log('Making PageSpeed API call to:', apiUrl);
 
     const response = await axios.get(apiUrl, { timeout: 30000 })
-    console.log('PageSpeed API response received');
     const data = response.data
 
     const categories = data.lighthouseResult?.categories || {}

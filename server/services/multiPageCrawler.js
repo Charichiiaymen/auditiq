@@ -1,15 +1,54 @@
 const axios = require('axios')
 const cheerio = require('cheerio')
+const { getRenderedPage, detectSiteType } = require('./scraper')
+const { extractVisibleContent, recalculateWordCount } = require('./contentExtractor')
 
-async function fetchPageSafe(url) {
+/**
+ * Fetch a page using Stealth Puppeteer with axios fallback.
+ * Homepage: always Puppeteer (catches JS-rendered content).
+ * Internal pages: use axios when site type is detected as Shopify/static/SPA.
+ */
+async function fetchPageSafe(url, { preferAxios = false } = {}) {
+  // If caller knows axios is sufficient (e.g. internal page on a detected SPA), skip Puppeteer
+  if (preferAxios) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        },
+      })
+      return response.data
+    } catch (axiosErr) {
+      console.warn(`axios failed for ${url}, falling back to Puppeteer:`, axiosErr.message)
+      // Fall through to Puppeteer below
+    }
+  }
+
+  // Stealth Puppeteer (primary for homepage, fallback for internal pages)
   try {
-    const response = await axios.get(url, {
-      timeout: 8000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AuditIQ/1.0)' },
-    })
-    return response.data
-  } catch {
-    return null
+    const { html } = await getRenderedPage(url)
+    return html
+  } catch (puppeteerErr) {
+    console.warn(`Puppeteer failed for ${url}:`, puppeteerErr.message)
+
+    // Last resort: try axios
+    try {
+      const response = await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        },
+      })
+      return response.data
+    } catch (axiosErr) {
+      console.error(`Both Puppeteer and axios failed for ${url}:`, axiosErr.message)
+      return null
+    }
   }
 }
 
@@ -48,6 +87,7 @@ function extractInternalLinks(html, baseUrl) {
 
 function extractPageMeta(html, url) {
   const $ = cheerio.load(html)
+  const cleanContent = extractVisibleContent(html)
   return {
     url,
     title: $('title').first().text().trim(),
@@ -55,7 +95,7 @@ function extractPageMeta(html, url) {
     h1: $('h1').first().text().trim(),
     h1Count: $('h1').length,
     canonical: $('link[rel="canonical"]').attr('href') || '',
-    wordCount: $('body').text().replace(/\s+/g, ' ').trim().split(' ').filter(w => w.length > 0).length,
+    wordCount: recalculateWordCount(cleanContent),
     hasSchema: $('script[type="application/ld+json"]').length > 0,
     hasMetaDescription: ($('meta[name="description"]').attr('content') || '').trim().length > 0,
     hasH1: $('h1').length > 0,
@@ -158,12 +198,24 @@ async function crawlSite(homepageUrl, homepageHtml) {
   const internalLinks = extractInternalLinks(homepageHtml, homepageUrl)
   const pagesToCrawl = internalLinks.slice(0, 3)
 
+  // Detect site type from homepage HTML to decide scraping strategy
+  const siteType = detectSiteType(homepageHtml)
+  // For detected SPA frameworks (Shopify/Next.js/Nuxt/Angular), axios is
+  // sufficient and ~3x faster than Puppeteer for internal pages.
+  // For unknown/true static sites, also use axios since the HTML is already
+  // server-rendered and doesn't need JS execution.
+  const useAxiosForInternals = true
+
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[Hybrid] Site type: ${siteType} — internal pages will use axios`)
+  }
+
   const homepageMeta = extractPageMeta(homepageHtml, homepageUrl)
   const crawledPages = [homepageMeta]
 
   const crawlResults = await Promise.all(
     pagesToCrawl.map(async (url) => {
-      const html = await fetchPageSafe(url)
+      const html = await fetchPageSafe(url, { preferAxios: useAxiosForInternals })
       if (!html) return null
       return extractPageMeta(html, url)
     })
@@ -177,7 +229,8 @@ async function crawlSite(homepageUrl, homepageHtml) {
     pagesCrawled: crawledPages.length,
     pages: crawledPages,
     crossPageIssues,
+    siteType,
   }
 }
 
-module.exports = { crawlSite }
+module.exports = { crawlSite, fetchPageSafe }

@@ -4,7 +4,10 @@
       "Bash(npm create:*)",
       "Bash(npm install:*)",
       "Bash(npm run:*)",
-      "Bash(npm list:*)"
+      "Bash(npm list:*)",
+      "mcp__plugin_ecc_sequential-thinking__sequentialthinking",
+      "Bash(node -e \"const {eng} = require\\(''stopword''\\); console.log\\(''the:'', eng.includes\\(''the''\\)\\); console.log\\(''with:'', eng.includes\\(''with''\\)\\); console.log\\(''your:'', eng.includes\\(''your''\\)\\);\")",
+      "Bash(node -e \"try { require\\(''./routes/audit''\\); console.log\\(''OK''\\); } catch\\(e\\) { console.error\\(e.message\\); }\")"
     ]
   }
 }

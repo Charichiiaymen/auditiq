@@ -1,16 +1,14 @@
-import axios from 'axios'
+import api from './api'
 import { sanitizeErrorMessage } from './errorUtils'
 
-// Set up axios interceptors for global error handling
+// Set up axios interceptors for global error handling on the shared api instance
 export const setupErrorHandling = () => {
   // Response interceptor for API calls
-  axios.interceptors.response.use(
+  api.interceptors.response.use(
     (response) => {
-      // Any status code that lie within the range of 2xx cause this function to trigger
       return response
     },
     (error) => {
-      // Any status codes that falls outside the range of 2xx cause this function to trigger
       // Sanitize error messages before logging to prevent information disclosure
       let sanitizedError = 'API Error'
 

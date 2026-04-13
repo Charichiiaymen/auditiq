@@ -4,6 +4,7 @@ server/node_modules
 
 # Environment
 server/.env
+client/.env
 
 # Build
 client/dist
