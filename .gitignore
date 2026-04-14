@@ -9,6 +9,9 @@ client/.env
 # Build
 client/dist
 
+# Logs
+server/server.log
+
 # OS
 .DS_Store
 Thumbs.db

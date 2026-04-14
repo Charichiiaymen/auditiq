@@ -142,7 +142,7 @@ function adjustResultWithPageSpeed(fastResult, pageSpeedData, pageSpeedWarning =
 
   // 2. Delta-based overallScore adjustment
   const oldTech = fastResult.technical?.score || 0
-  const overallDelta = Math.round((newTechScore - oldTech) * 0.3)
+  const overallDelta = Math.round((newTechScore - oldTech) * 0.4)
   let newOverall = (fastResult.overallScore || 0) + overallDelta
 
   // 3. Apply Performance Gateway: cap at 50 if performance < 40

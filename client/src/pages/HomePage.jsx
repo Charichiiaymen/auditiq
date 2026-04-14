@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import { sanitizeUserData } from '../utils/errorUtils'
+import api from '../utils/api'
 
 function HomePage() {
   const navigate = useNavigate()
@@ -10,6 +11,38 @@ function HomePage() {
   const [facebook, setFacebook] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // Warmup hook — wake the Hugging Face Space before user starts an audit.
+  // Retries up to 3 times with exponential back-off to handle cold starts (30-60s).
+  const [serverReady, setServerReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function warmup(attempt = 0) {
+      try {
+        const res = await api.get('/api/ping', { timeout: 8000 })
+        if (!cancelled) {
+          console.log('[Warmup] Server is awake:', res.data.message)
+          setServerReady(true)
+        }
+      } catch (err) {
+        if (cancelled) return
+        if (attempt < 3) {
+          const delay = Math.pow(2, attempt) * 3000 // 3s, 6s, 12s
+          console.warn(`[Warmup] Ping failed (attempt ${attempt + 1}/4), retrying in ${delay / 1000}s...`)
+          await new Promise(r => setTimeout(r, delay))
+          warmup(attempt + 1)
+        } else {
+          console.warn('[Warmup] Server unreachable after 4 attempts. Proceeding anyway.')
+          setServerReady(true) // allow user to proceed
+        }
+      }
+    }
+
+    warmup()
+    return () => { cancelled = true }
+  }, [])
 
   async function handleAudit() {
     setError('')

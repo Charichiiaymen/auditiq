@@ -21,6 +21,13 @@ Always quantify impact: "Fix X missing elements to recover Y potential traffic" 
 const FALLBACK = [
   {
     priority: 'High',
+    title: 'Enable HTTPS security',
+    description: 'Switch to SSL to avoid Google penalties and build trust — Technical carries 40% of overall score',
+    pillar: 'Technical',
+    reasoningTrace: 'Audit shows isHTTPS: false → Security risk and ranking penalty (affects 40% weight pillar) → Install SSL certificate'
+  },
+  {
+    priority: 'High',
     title: 'Fix missing page title',
     description: 'Add descriptive title tag to improve search visibility',
     pillar: 'SEO',
@@ -34,13 +41,6 @@ const FALLBACK = [
     reasoningTrace: 'Audit shows hasMetaDescription: false → Missed CTR opportunity → Add compelling meta desc'
   },
   {
-    priority: 'High',
-    title: 'Enable HTTPS security',
-    description: 'Switch to SSL to avoid Google penalties and build trust',
-    pillar: 'Technical',
-    reasoningTrace: 'Audit shows isHTTPS: false → Security risk and ranking penalty → Install SSL certificate'
-  },
-  {
     priority: 'Medium',
     title: 'Add call-to-action',
     description: 'Guide visitors to take desired action above the fold',
@@ -50,9 +50,9 @@ const FALLBACK = [
   {
     priority: 'Low',
     title: 'Validate social handles',
-    description: 'Verify Instagram/Facebook for improved social proof',
+    description: 'Verify Instagram/Facebook for improved social proof — DOM verification can confirm presence on page',
     pillar: 'Social',
-    reasoningTrace: 'Audit shows social data validation issues → Weak trust signals → Confirm social links'
+    reasoningTrace: 'Audit shows social data validation issues → Weak trust signals (10% weight pillar) → Confirm social links on page via DOM verification'
   },
 ];
 
@@ -71,6 +71,10 @@ async function generateRecommendations(auditResult) {
   const userPrompt = `DATA-GROUNDED AUDIT ANALYSIS
 ============================
 
+SCORING METHODOLOGY:
+Overall = Technical (40%) + SEO (30%) + Content (20%) + Social (10%)
+Technical includes PageSpeed Core Web Vitals (20 pts of 100)
+
 VERIFIED AUDIT METRICS:
 SEO PILLAR — Score: ${seo.score}/100
 - Title tag: ${seo.hasTitle ? 'Present' : 'MISSING'}, length: ${seo.titleLength}/30-60 chars
@@ -80,7 +84,7 @@ SEO PILLAR — Score: ${seo.score}/100
 - Canonical tag: ${seo.hasCanonical ? 'Present' : 'MISSING'}
 - Robots meta: ${seo.hasRobotsMeta ? 'Present' : 'MISSING'}
 
-TECHNICAL PILLAR — Score: ${technical.score}/100
+TECHNICAL PILLAR — Score: ${technical.score}/100 (WEIGHTED HIGHEST AT 40%)
 - HTTPS security: ${technical.isHTTPS ? 'SECURE' : 'INSECURE'}
 - Mobile viewport: ${technical.hasViewportMeta ? 'Present' : 'MISSING'}
 - Open Graph tags: ${technical.hasOpenGraph ? 'Present' : 'MISSING'}
@@ -93,12 +97,31 @@ CONTENT PILLAR — Score: ${correctedContent.score}/100
 - Paragraph structure: ${correctedContent.paragraphCount} paragraphs
 - Contact information: ${correctedContent.hasPhoneNumber || correctedContent.hasEmail ? 'Present' : 'MISSING'}
 
+KEYWORD ANALYSIS:
+- Primary keyword: "${seo.topKeywords?.[0]?.word || 'N/A'}" (density: ${seo.topKeywords?.[0]?.density || 0}%)
+- Top 3 keywords: ${(seo.topKeywords || []).slice(0, 3).map(k => `${k.word} (${k.density}%)`).join(', ') || 'N/A'}
+- Keyword in title: ${seo.keywordInTitle ? 'YES' : 'NO'}
+- Keyword in H1: ${seo.keywordInH1 ? 'YES' : 'NO'}
+- Keyword in meta: ${seo.keywordInMeta ? 'YES' : 'NO'}
+
 EXTRACTED VISIBLE CONTENT PREVIEW (first 500 chars):
 ${cleanContent.substring(0, 500)}
 
 SOCIAL PILLAR — Score: ${social.score}/100
 - Instagram: ${social.instagramProvided ? 'Provided' : 'Missing'}, validity: ${social.instagramHandleValid ? 'Valid' : 'Invalid'}
 - Facebook: ${social.facebookProvided ? 'Provided' : 'Missing'}, validity: ${social.facebookURLValid ? 'Valid' : 'Invalid'}
+
+SOCIAL DOM VERIFICATION:
+- Instagram verified on page: ${social.instagramOnPage ? 'YES' : 'NO'}${social.instagramLinkFound ? ` (link: ${social.instagramLinkFound})` : ''}
+- Facebook verified on page: ${social.facebookOnPage ? 'YES' : 'NO'}${social.facebookLinkFound ? ` (link: ${social.facebookLinkFound})` : ''}
+- Other social platforms on page: ${(social.socialLinksOnPage || []).filter(l => !['Instagram','Facebook'].includes(l.platform)).map(l => l.platform).join(', ') || 'None'}
+- Verified by Puppeteer: ${social.verifiedByPuppeteer ? 'YES' : 'NO (static HTML only)'}
+
+ISSUE SUMMARY:
+- Total issues: ${auditResult.issues?.length || 0}
+- Critical: ${(auditResult.issues || []).filter(i => i.severity === 'Critical').length}
+- High: ${(auditResult.issues || []).filter(i => i.severity === 'High').length}
+- Medium: ${(auditResult.issues || []).filter(i => i.severity === 'Medium').length}
 
 PAGE SPEED CORE WEB VITALS:
 ${pageSpeed ? `
@@ -112,6 +135,7 @@ CRAWL DATA:
 ${crawl ? `
 - Pages crawled: ${crawl.pagesCrawled}
 - Cross-page issues detected: ${crawl.crossPageIssues?.length || 0}
+- Site type: ${crawl.siteType || 'Unknown'}
 ` : 'Crawl data not available'}
 
 YOUR TASK: Provide EXACTLY 5 data-grounded recommendations with Reasoning Traces.
@@ -122,6 +146,7 @@ MANDATORY FORMAT REQUIREMENTS:
 3. Link each suggestion to verified data above
 4. NEVER suggest generic fixes not backed by the data
 5. Include a Reasoning Trace showing data → insight → action
+6. Prioritize Technical pillar issues (40% weight) when scores are low
 
 EXAMPLE OUTPUT FORMAT:
 [
@@ -158,7 +183,7 @@ RETURN ONLY VALID JSON ARRAY - NO EXPLANATIONS, NO MARKDOWN.`;
       options: {
         temperature: 0.4,
       },
-    }, { headers })
+    }, { headers, timeout: 30000 })
 
     const responseText = response.data.message.content;
 

@@ -1,7 +1,41 @@
 const axios = require('axios')
 const cheerio = require('cheerio')
-const { getRenderedPage, detectSiteType } = require('./scraper')
+const { getRenderedPage, detectSiteType, randomUA } = require('./scraper')
 const { extractVisibleContent, recalculateWordCount } = require('./contentExtractor')
+
+// ─── Realistic Axios Headers ───────────────────────────────────────────────
+function getAxiosHeaders() {
+  return {
+    'User-Agent': randomUA(),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Cache-Control': 'no-cache',
+  }
+}
+
+// ─── Axios Fetch with Retry ─────────────────────────────────────────────────
+async function axiosFetchWithRetry(url, retries = 2) {
+  const delays = [2000, 4000]
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 10000,
+        headers: getAxiosHeaders(),
+      })
+      return response.data
+    } catch (err) {
+      if (attempt >= retries) throw err
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[Crawler] axios attempt ${attempt + 1} failed for ${url}: ${err.message}`)
+      }
+      await new Promise(r => setTimeout(r, delays[attempt]))
+    }
+  }
+}
 
 /**
  * Fetch a page using Stealth Puppeteer with axios fallback.
@@ -12,15 +46,8 @@ async function fetchPageSafe(url, { preferAxios = false } = {}) {
   // If caller knows axios is sufficient (e.g. internal page on a detected SPA), skip Puppeteer
   if (preferAxios) {
     try {
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-            '(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        },
-      })
-      return response.data
+      const data = await axiosFetchWithRetry(url)
+      return { html: data, usedPuppeteer: false }
     } catch (axiosErr) {
       console.warn(`axios failed for ${url}, falling back to Puppeteer:`, axiosErr.message)
       // Fall through to Puppeteer below
@@ -30,21 +57,14 @@ async function fetchPageSafe(url, { preferAxios = false } = {}) {
   // Stealth Puppeteer (primary for homepage, fallback for internal pages)
   try {
     const { html } = await getRenderedPage(url)
-    return html
+    return { html, usedPuppeteer: true }
   } catch (puppeteerErr) {
     console.warn(`Puppeteer failed for ${url}:`, puppeteerErr.message)
 
-    // Last resort: try axios
+    // Last resort: try axios with retry
     try {
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-            '(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        },
-      })
-      return response.data
+      const data = await axiosFetchWithRetry(url)
+      return { html: data, usedPuppeteer: false }
     } catch (axiosErr) {
       console.error(`Both Puppeteer and axios failed for ${url}:`, axiosErr.message)
       return null
@@ -215,9 +235,9 @@ async function crawlSite(homepageUrl, homepageHtml) {
 
   const crawlResults = await Promise.all(
     pagesToCrawl.map(async (url) => {
-      const html = await fetchPageSafe(url, { preferAxios: useAxiosForInternals })
-      if (!html) return null
-      return extractPageMeta(html, url)
+      const fetchResult = await fetchPageSafe(url, { preferAxios: useAxiosForInternals })
+      if (!fetchResult) return null
+      return extractPageMeta(fetchResult.html, url)
     })
   )
 

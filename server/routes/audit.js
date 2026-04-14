@@ -1,11 +1,12 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { removeStopwords, eng, fra } = require('stopword');
 const { generateRecommendations } = require('../services/aiRecommender');
 const { crawlSite, fetchPageSafe } = require('../services/multiPageCrawler');
 const { extractVisibleContent, recalculateWordCount } = require('../services/contentExtractor');
 const { getPageSpeedData } = require('../services/pageSpeed');
+const { verifySocialLinks, scoreSocialEnhanced } = require('../services/socialVerifier');
+const { extractKeywords } = require('../services/keywordExtractor');
 
 const router = express.Router();
 
@@ -27,67 +28,8 @@ function isValidAuditUrl(url) {
   }
 }
 
-// ─── Advanced Keyword Extraction ───────────────────────────────────────────
-function extractKeywords(text) {
-  // Remove HTML entities and extra whitespace
-  let cleanText = text.replace(/&[a-z]+;/gi, ' ') // Remove HTML entities like &nbsp;
-                     .replace(/<[^>]*>/g, ' ')    // Remove any remaining HTML tags
-                     .replace(/[^\w\s]/gi, ' ')   // Replace punctuation with spaces (prevents word merging)
-                     .replace(/\s+/g, ' ')        // Normalize whitespace
-                     .trim()
-                     .toLowerCase();
-
-  // Split into words and filter out short words
-  let words = cleanText.split(' ').filter(w => w.length >= 3);
-
-  // Remove stopwords using both English and French dictionaries
-  words = removeStopwords(words, [...eng, ...fra]);
-
-  // Supplementary stopwords missed by the standard dictionary
-  const extraStops = new Set([
-    // Common function words missing from stopword lib
-    'without', 'within', 'upon', 'among', 'throughout', 'therefore',
-    'however', 'whether', 'although', 'unless', 'towards', 'besides',
-    'onto', 'per', 'via', 'vs', 'else', 'enough', 'rather', 'since',
-    'though', 'yet', 'already', 'always', 'never', 'often', 'sometimes',
-    // Common verbs and auxiliaries
-    'use', 'used', 'using', 'also', 'well', 'may', 'like', 'get', 'got',
-    'way', 'ways', 'make', 'makes', 'made', 'let', 'new', 'one', 'two',
-    'need', 'needs', 'want', 'set', 'see', 'look', 'go', 'going', 'come',
-    'know', 'take', 'many', 'much', 'say', 'said', 'find', 'found', 'give',
-    'back', 'still', 'also',
-  ]);
-  words = words.filter(w => !extraStops.has(w));
-
-  // Further filter to ensure quality keywords
-  words = words.filter(w => {
-    // Remove words with numbers
-    if (/\d/.test(w)) return false;
-    // Remove words that are mostly vowels or consonants
-    if (w.length < 3) return false;
-    return true;
-  });
-
-  // Calculate frequency
-  const wordFreq = {};
-  words.forEach(w => { wordFreq[w] = (wordFreq[w] || 0) + 1 });
-
-  // Sort by frequency
-  const sortedWords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1]);
-
-  // Calculate density and return top keywords
-  const totalWords = words.length;
-  const topKeywords = sortedWords.slice(0, 5).map(([word, count]) => ({
-    word,
-    count,
-    density: parseFloat(((count / totalWords) * 100).toFixed(2))
-  }));
-
-  return topKeywords;
-}
-
 // ─── STEP 2: SEO Audit ─────────────────────────────────────────────────────
-function auditSEO(html, url) {
+function auditSEO(html, url, topKeywords) {
   const $ = cheerio.load(html)
 
   // ── Title ──────────────────────────────────────────────────
@@ -139,13 +81,11 @@ function auditSEO(html, url) {
     } else { internalLinks++ }
   })
 
-  // ── Keyword Analysis ───────────────────────────────────────
-  // Add spaces after block elements to prevent word merging (e.g. "DomainThis")
-  ;['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'li', 'br', 'hr', 'section', 'article', 'main', 'header', 'footer', 'nav', 'aside', 'blockquote', 'pre', 'tr', 'dt', 'dd'].forEach(tag => { $(tag).append(' ') })
-  const bodyText = $('body').text()
-  const topKeywords = extractKeywords(bodyText)
-
+  // ── Keyword Analysis (Phase 2: weighted model with N-gram detection) ──
   const primaryKeyword = topKeywords[0]?.word || ''
+
+  // Body text for content signal checks (CTA, social proof, etc.)
+  const bodyText = $('body').text().toLowerCase()
   const keywordInTitle = primaryKeyword ? titleText.toLowerCase().includes(primaryKeyword) : false
   const keywordInH1 = primaryKeyword ? h1Text.toLowerCase().includes(primaryKeyword) : false
   const keywordInMeta = primaryKeyword ? metaDesc.toLowerCase().includes(primaryKeyword) : false
@@ -341,35 +281,35 @@ function scoreTechnical(techData, pageSpeedData) {
   if (pageSpeedData) {
     const cwv = pageSpeedData.coreWebVitals || {};
 
-    // LCP influence (10 pts)
+    // LCP influence (7 pts)
     const lcpScore = cwv.LCP?.score || 0;
-    if (lcpScore >= 0.9) score += 10;
-    else if (lcpScore >= 0.5) score += 5;
+    if (lcpScore >= 0.9) score += 7;
+    else if (lcpScore >= 0.5) score += 3;
 
-    // Speed Index influence (10 pts)
+    // FCP influence (7 pts) — Phase 3: added FCP to technical scoring
+    const fcpScore = cwv.FCP?.score || 0;
+    if (fcpScore >= 0.9) score += 7;
+    else if (fcpScore >= 0.5) score += 3;
+
+    // Speed Index influence (6 pts)
     const speedIndexScore = cwv.SpeedIndex?.score || 0;
-    if (speedIndexScore >= 0.9) score += 10;
-    else if (speedIndexScore >= 0.5) score += 5;
+    if (speedIndexScore >= 0.9) score += 6;
+    else if (speedIndexScore >= 0.5) score += 3;
   }
 
   return Math.min(score, 100);
 }
 
 // ─── STEP 7: Content Audit ─────────────────────────────────────────────────
-function auditContent(html) {
+function auditContent(html, topKeywords) {
   const $ = cheerio.load(html);
-
-  // ── Keyword Analysis ───────────────────────────────────────
-  ;['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'li', 'br', 'hr', 'section', 'article', 'main', 'header', 'footer', 'nav', 'aside', 'blockquote', 'pre', 'tr', 'dt', 'dd'].forEach(tag => { $(tag).append(' ') })
-  const bodyText = $('body').text();
-  const topKeywords = extractKeywords(bodyText);
 
   const cleanContent = extractVisibleContent(html);
   const wordCount = recalculateWordCount(cleanContent);
 
+  const bodyText = $('body').text().toLowerCase();
   const ctaKeywords = ['buy', 'order', 'subscribe', 'sign up', 'get started', 'contact', 'book', 'demo', 'try', 'download', 'shop now', 'learn more', 'get a quote'];
-  const bodyLower = bodyText.toLowerCase();
-  const hasCTA = ctaKeywords.some((kw) => bodyLower.includes(kw));
+  const hasCTA = ctaKeywords.some((kw) => bodyText.includes(kw));
 
   const paragraphCount = $('p').length;
   const avgWordsPerParagraph = paragraphCount > 0
@@ -428,53 +368,14 @@ function scoreContent(contentData) {
   return Math.min(score, 100);
 }
 
-// ─── STEP 9: Social Audit ──────────────────────────────────────────────────
-function auditSocial(instagram, facebook, html) {
-  const $ = cheerio.load(html)
-  const pageText = $('body').html() || ''
-
-  const instagramProvided = typeof instagram === 'string' && instagram.trim().length > 0
-  const instagramHandleValid = instagramProvided
-    ? /^@?[a-zA-Z0-9_.]{1,30}$/.test(instagram.trim())
-    : false
-
-  const facebookProvided = typeof facebook === 'string' && facebook.trim().length > 0
-  const facebookURLValid = facebookProvided
-    ? /^https?:\/\/(www\.)?facebook\.com\/.+/.test(facebook.trim())
-    : false
-
-  const bothProvided = instagramProvided && facebookProvided
-
-  // Check if social links actually appear on the page
-  const instagramHandle = instagram.replace('@', '').toLowerCase().trim()
-  const instagramOnPage = instagramProvided
-    ? pageText.toLowerCase().includes('instagram.com/' + instagramHandle) || pageText.toLowerCase().includes(instagramHandle)
-    : false
-
-  const facebookOnPage = facebookProvided
-    ? pageText.toLowerCase().includes(facebook.trim().toLowerCase())
-    : false
-
-  return {
-    instagramProvided,
-    instagramHandleValid,
-    facebookProvided,
-    facebookURLValid,
-    bothProvided,
-    instagramOnPage,
-    facebookOnPage,
-  }
+// ─── STEP 9: Social Audit (Phase 4: Puppeteer DOM verification) ──────────
+function auditSocial(instagram, facebook, html, usedPuppeteer = false) {
+  return verifySocialLinks(html, instagram, facebook, usedPuppeteer)
 }
 
-// ─── Score Social ─────────────────────────────────────────────────
+// ─── Score Social (Phase 4: enhanced with extra platform bonus) ──────────
 function scoreSocial(socialData) {
-  let score = 0
-  if (socialData.instagramProvided && socialData.instagramHandleValid) score += 20
-  if (socialData.instagramOnPage) score += 10
-  if (socialData.facebookProvided && socialData.facebookURLValid) score += 20
-  if (socialData.facebookOnPage) score += 10
-  if (socialData.bothProvided) score += 40
-  return score
+  return scoreSocialEnhanced(socialData)
 }
 
 // ─── Issue Severity Triage ─────────────────────────────────────────────────
@@ -1043,36 +944,44 @@ function injectPageSpeedIssues(issues, pageSpeedData) {
 
 // Helper: fast audit (scrape + score + issues — no crawl, no AI)
 async function performFastAudit(url, instagram, facebook) {
-  const html = await fetchPageSafe(url);
-  if (!html) {
+  const fetchResult = await fetchPageSafe(url);
+  if (!fetchResult) {
     const err = new Error('Failed to fetch the provided URL. The site may be down or blocking automated access.');
     err.status = 502;
     throw err;
   }
+  const { html, usedPuppeteer } = fetchResult;
 
-  const [seoData, techData, contentData] = await Promise.all([
-    Promise.resolve(auditSEO(html, url)),
+  // Extract keywords once, pass to both audit functions
+  const $kw = cheerio.load(html)
+  const topKeywords = extractKeywords($kw, html)
+
+  // Phase 3: Fetch PageSpeed in parallel with other audits
+  const [seoData, techData, contentData, pageSpeedData] = await Promise.all([
+    Promise.resolve(auditSEO(html, url, topKeywords)),
     Promise.resolve(auditTechnical(html, url)),
-    Promise.resolve(auditContent(html)),
+    Promise.resolve(auditContent(html, topKeywords)),
+    getPageSpeedData(url).catch(() => null),
   ]);
 
-  const socialData = auditSocial(instagram, facebook, html);
+  const socialData = auditSocial(instagram, facebook, html, usedPuppeteer);
 
   const seoScore = scoreSEO(seoData);
-  const technicalScore = scoreTechnical(techData, null);
+  const technicalScore = scoreTechnical(techData, pageSpeedData);
   const contentScore = scoreContent(contentData);
   const socialScore = scoreSocial(socialData);
 
   const overallScore = Math.round(
-    seoScore * 0.4 +
-    technicalScore * 0.3 +
+    technicalScore * 0.4 +
+    seoScore * 0.3 +
     contentScore * 0.2 +
     socialScore * 0.1
   );
 
   const issues = triageIssues(seoData, techData, contentData, socialData);
+  const allIssues = injectPageSpeedIssues(issues, pageSpeedData);
 
-  return {
+  const result = {
     url,
     timestamp: new Date().toISOString(),
     seo: { ...seoData, score: seoScore },
@@ -1080,8 +989,14 @@ async function performFastAudit(url, instagram, facebook) {
     content: { ...contentData, score: contentScore },
     social: { ...socialData, score: socialScore },
     overallScore,
-    issues,
+    issues: allIssues,
+    pageSpeed: pageSpeedData,
   };
+  if (!pageSpeedData) {
+    result._pageSpeedWarning = 'PageSpeed Insights data unavailable. Technical score based on heuristics only.';
+  }
+
+  return result;
 }
 
 // Helper: deep audit (crawl + AI recommendations — requires html context from fast)
@@ -1133,14 +1048,14 @@ router.post('/audit/deep', async (req, res) => {
   }
 
   try {
-    const html = await fetchPageSafe(url);
-    if (!html) {
+    const fetchResult = await fetchPageSafe(url);
+    if (!fetchResult) {
       const err = new Error('Failed to fetch the provided URL. The site may be down or blocking automated access.');
       err.status = 502;
       throw err;
     }
 
-    const deepData = await performDeepAudit(url, html, fastResult);
+    const deepData = await performDeepAudit(url, fetchResult.html, fastResult);
     return res.json(deepData);
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message });
@@ -1159,29 +1074,36 @@ router.post('/audit', async (req, res) => {
   }
 
   try {
-    const html = await fetchPageSafe(url);
-    if (!html) {
+    const fetchResult = await fetchPageSafe(url);
+    if (!fetchResult) {
       return res.status(502).json({ error: 'Failed to fetch the provided URL. The site may be down or blocking automated access.' });
     }
+    const { html, usedPuppeteer } = fetchResult;
 
-    const [seoData, techData, contentData] = await Promise.all([
-      Promise.resolve(auditSEO(html, url)),
+    // Extract keywords once, pass to both audit functions
+    const $kw = cheerio.load(html)
+    const topKeywords = extractKeywords($kw, html)
+
+    // Phase 3: Run PageSpeed in parallel with other audits
+    const [seoData, techData, contentData, pageSpeedData] = await Promise.all([
+      Promise.resolve(auditSEO(html, url, topKeywords)),
       Promise.resolve(auditTechnical(html, url)),
-      Promise.resolve(auditContent(html)),
+      Promise.resolve(auditContent(html, topKeywords)),
+      getPageSpeedData(url).catch(() => null),
     ]);
 
-    const socialData = auditSocial(instagram, facebook, html);
+    const socialData = auditSocial(instagram, facebook, html, usedPuppeteer);
 
     const seoScore = scoreSEO(seoData);
-    // PageSpeed scoring is done client-side after frontend fetches PageSpeed data
-    const technicalScore = scoreTechnical(techData, null);
+    // Phase 3: PageSpeed data now feeds directly into technical pillar scoring
+    const technicalScore = scoreTechnical(techData, pageSpeedData);
     const contentScore = scoreContent(contentData);
     const socialScore = scoreSocial(socialData);
 
-    // Calculate weighted overall score (will be adjusted by frontend after PageSpeed)
+    // Calculate weighted overall score
     let overallScore = Math.round(
-      seoScore * 0.4 +
-      technicalScore * 0.3 +
+      technicalScore * 0.4 +
+      seoScore * 0.3 +
       contentScore * 0.2 +
       socialScore * 0.1
     );
@@ -1197,16 +1119,22 @@ router.post('/audit', async (req, res) => {
     };
 
     const [recommendations, crawlData] = await Promise.all([
-      generateRecommendations({ ...result, html }),
+      generateRecommendations({ ...result, html, pageSpeed: pageSpeedData }),
       crawlSite(url, html),
     ]);
 
     const issues = triageIssues(seoData, techData, contentData, socialData);
-    // PageSpeed issues will be injected client-side after frontend PageSpeed fetch
+    // Phase 3: Inject PageSpeed issues server-side
+    const allIssues = injectPageSpeedIssues(issues, pageSpeedData);
 
     result.recommendations = recommendations;
-    result.issues = issues;
+    result.issues = allIssues;
     result.crawl = crawlData;
+    // Phase 3: Include PageSpeed data in response so frontend can display it
+    result.pageSpeed = pageSpeedData;
+    if (!pageSpeedData) {
+      result._pageSpeedWarning = 'PageSpeed Insights data unavailable. The audit is still valid, but performance scores are based on heuristics only.';
+    }
 
     return res.json(result);
   } catch (err) {

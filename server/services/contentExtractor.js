@@ -35,7 +35,7 @@ const CONTENT_SELECTORS = [
   '#content', '.article-content'
 ];
 
-function extractVisibleContent(html) {
+function extractVisibleContent(html, { maxLength = 100000 } = {}) {
   if (!html || typeof html !== 'string') return '';
 
   try {
@@ -75,7 +75,7 @@ function extractVisibleContent(html) {
     return content
       .replace(/\s+/g, ' ')
       .trim()
-      .substring(0, 10000);
+      .substring(0, maxLength);
   } catch (error) {
     console.warn('Content extraction failed:', error.message);
     return '';
