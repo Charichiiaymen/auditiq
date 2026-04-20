@@ -150,4 +150,39 @@ function scoreSocialEnhanced(socialData) {
   return Math.min(score, 100)
 }
 
-module.exports = { verifySocialLinks, scoreSocialEnhanced }
+/**
+ * Verify social handles against DOM links with Puppeteer rendering check.
+ * Adds DOM verification warnings and link validation enhancements.
+ *
+ * @param {string} html - Full HTML from Puppeteer render
+ * @param {string} instagram - Instagram handle
+ * @param {string} facebook - Facebook URL
+ * @param {boolean} usedPuppeteer - Whether HTML was rendered by Puppeteer
+ * @returns {Object} - Verification results with DOM warnings and link counts
+ */
+function verifySocialLinksDOM(html, instagram, facebook, usedPuppeteer = false) {
+  const $ = cheerio.load(html)
+  const results = verifySocialLinks(html, instagram, facebook, usedPuppeteer)
+
+  // If not using Puppeteer, add a warning that DOM verification may be incomplete
+  if (!usedPuppeteer) {
+    results.domWarning = 'Social verification used static HTML — JS-rendered links may be missed'
+  }
+
+  // Count total social links found
+  results.totalSocialLinks = results.socialLinksOnPage.length
+
+  // Verify Instagram link actually points to correct handle
+  if (results.instagramOnPage && !results.instagramLinkFound) {
+    results.instagramOnPage = false // Link exists but doesn't match handle
+  }
+
+  // Verify Facebook URL matches actual link
+  if (results.facebookOnPage && !results.facebookLinkFound) {
+    results.facebookOnPage = false
+  }
+
+  return results
+}
+
+module.exports = { verifySocialLinks, verifySocialLinksDOM, scoreSocialEnhanced }
