@@ -85,6 +85,11 @@ const pdfRouter = require('./routes/pdf');
 app.use('/api', auditRouter);
 app.use('/api', pdfRouter);
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
+// ─── High-Performance Timeout Configuration ─────────────────────────────────
+// Ensure long-running audits don't timeout (120s window for deep analysis)
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[AUDIT] Server running on http://0.0.0.0:${PORT}`);
 });
+server.timeout = 120000;           // 2 minutes for deep audits
+server.keepAliveTimeout = 121000;   // Slightly higher than timeout to prevent socket hangup
+console.log(`[AUDIT] Server timeouts configured: timeout=${server.timeout}ms, keepAlive=${server.keepAliveTimeout}ms`);

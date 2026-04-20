@@ -1,11 +1,26 @@
 const axios = require('axios')
+const NodeCache = require('node-cache')
+
+// ─── PageSpeed Cache (60-minute TTL) ────────────────────────────────────────
+// Cache PageSpeed results to avoid repeated API calls for the same URL
+const pageSpeedCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 }) // 60 min TTL
 
 async function getPageSpeedData(url) {
   const apiKey = process.env.PAGESPEED_API_KEY
   if (!apiKey) {
+    console.log('[AUDIT] PageSpeed: No API key configured, skipping')
     return null
   }
 
+  // Check cache first
+  const cacheKey = `pagespeed_${Buffer.from(url).toString('base64')}`
+  const cached = pageSpeedCache.get(cacheKey)
+  if (cached) {
+    console.log(`[AUDIT] PageSpeed: Using cached data for ${url}`)
+    return cached
+  }
+
+  console.log(`[AUDIT] PageSpeed: Fetching fresh data for ${url}`)
   try {
     const params = new URLSearchParams({
       url: url,
@@ -18,7 +33,7 @@ async function getPageSpeedData(url) {
     params.append('category', 'accessibility')
     const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params.toString()}`
 
-    const response = await axios.get(apiUrl, { timeout: 30000 })
+    const response = await axios.get(apiUrl, { timeout: 120000 }) // 2-minute timeout
     const data = response.data
 
     const categories = data.lighthouseResult?.categories || {}
@@ -131,7 +146,7 @@ async function getPageSpeedData(url) {
       }
     })
 
-    return {
+    const result = {
       performanceScore,
       seoScore,
       bestPracticesScore,
@@ -140,7 +155,13 @@ async function getPageSpeedData(url) {
       opportunities: opportunities.slice(0, 6),
       diagnostics: diagnostics.slice(0, 5),
       fetchedAt: new Date().toISOString(),
+      cached: false,
     }
+
+    // Cache the result for 60 minutes
+    pageSpeedCache.set(cacheKey, { ...result, cached: true })
+    console.log(`[AUDIT] PageSpeed: Cached result for ${url}`)
+    return result
   } catch (err) {
     console.error('PageSpeed API error:', err.message)
     if (err.response) {

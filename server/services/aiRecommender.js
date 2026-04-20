@@ -183,7 +183,7 @@ RETURN ONLY VALID JSON ARRAY - NO EXPLANATIONS, NO MARKDOWN.`;
       options: {
         temperature: 0.4,
       },
-    }, { headers, timeout: 30000 })
+    }, { headers, timeout: 120000 }) // 2-minute timeout for deep analysis
 
     const responseText = response.data.message.content;
 
@@ -231,7 +231,18 @@ RETURN ONLY VALID JSON ARRAY - NO EXPLANATIONS, NO MARKDOWN.`;
 
     return validatedRecommendations.slice(0, 5);
   } catch (err) {
+    const isTimeout = err.code === 'ECONNABORTED' || err.message.includes('timeout') || err.message.includes('ETIMEDOUT');
     console.error('AI recommender error:', err.message);
+
+    // Graceful degradation: return fallback with timeout warning
+    if (isTimeout) {
+      return {
+        recommendations: FALLBACK,
+        _warning: 'AI recommendations timed out after 120s. Using fallback recommendations. Please retry later for personalized insights.',
+        _timeout: true,
+      };
+    }
+
     return FALLBACK;
   }
 }

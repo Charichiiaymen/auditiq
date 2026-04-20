@@ -7,7 +7,7 @@ const cheerio = require('cheerio');
 
 const REMOVE_SELECTORS = [
   // Script bundles (minified, inline, external, JSON-LD)
-  'script', 'noscript',
+  'script', 'script[type="application/ld+json"]', 'noscript',
   // Style blocks (inline, linked, scoped)
   'style', 'link[rel="stylesheet"]',
   // Meta / head-level elements that leak into body

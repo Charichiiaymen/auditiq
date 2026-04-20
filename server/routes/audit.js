@@ -3,9 +3,9 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { generateRecommendations } = require('../services/aiRecommender');
 const { crawlSite, fetchPageSafe } = require('../services/multiPageCrawler');
-const { extractVisibleContent, recalculateWordCount } = require('../services/contentExtractor');
+const { extractCleanContent, recalculateWordCount } = require('../services/cleanRoom');
 const { getPageSpeedData } = require('../services/pageSpeed');
-const { verifySocialLinks, scoreSocialEnhanced } = require('../services/socialVerifier');
+const { verifySocialLinksDOM, scoreSocialEnhanced } = require('../services/socialVerifier');
 const { extractKeywords } = require('../services/keywordExtractor');
 
 const router = express.Router();
@@ -15,13 +15,62 @@ function isValidAuditUrl(url) {
   try {
     const parsed = new URL(url)
     if (!['http:', 'https:'].includes(parsed.protocol)) return false
-    const host = parsed.hostname
-    // Block localhost and loopback
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false
-    // Block private/link-local/metadata IPs
-    if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false
+
+    let host = parsed.hostname.toLowerCase()
+
+    // Normalize IPv6 addresses - remove brackets
+    if (host.startsWith('[') && host.endsWith(']')) {
+      host = host.slice(1, -1)
+    }
+
+    // Block IPv6 loopback (full and compressed forms)
+    if (host === '::1' || host === '0:0:0:0:0:0:0:1') return false
+
+    // Normalize IPv6-mapped IPv4 addresses (e.g., ::ffff:127.0.0.1 → 127.0.0.1)
+    if (host.startsWith('::ffff:')) {
+      host = host.slice(7) // Remove ::ffff: prefix
+    }
+
+    // Block localhost (all forms)
+    if (host === 'localhost') return false
+    if (/^localhost\./.test(host)) return false
+
+    // Block IPv4 loopback (127.0.0.0/8)
+    if (/^127\./.test(host)) return false
+    if (host === '127.0.0.1') return false
+
+    // Block unspecified address
+    if (host === '::' || host === '0.0.0.0' || host === '0.') return false
+
+    // Block IPv4 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    if (/^10\./.test(host)) return false
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false
+    if (/^192\.168\./.test(host)) return false
+
+    // Block IPv4 link-local (169.254.0.0/16)
     if (/^169\.254\./.test(host)) return false
-    if (host.startsWith('0.')) return false
+
+    // Block IPv6 private/unique local addresses (fc00::/7)
+    if (/^fc[0-9a-f]{2}:/i.test(host)) return false
+    if (/^fd[0-9a-f]{2}:/i.test(host)) return false
+
+    // Block IPv6 link-local addresses (fe80::/10)
+    if (/^fe[89ab][0-9a-f]*:/i.test(host)) return false
+
+    // Block IPv4-mapped private ranges that might have passed through
+    // (e.g., ::ffff:10.0.0.1 after stripping)
+    if (/^::ffff:(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(host)) return false
+
+    // Block cloud metadata hostnames and IPs
+    const blockedHostnames = ['metadata.google.internal', 'metadata.azure.internal']
+    if (blockedHostnames.some(h => host === h || host.endsWith('.' + h))) return false
+
+    // Block metadata IP (169.254.169.254 - AWS/GCP/Azure)
+    if (host === '169.254.169.254') return false
+
+    // Block IPv6-mapped metadata IP
+    if (/^::ffff:169\.254\.169\.254$/i.test(host)) return false
+
     return true
   } catch {
     return false
@@ -130,7 +179,7 @@ function auditSEO(html, url, topKeywords) {
 
   // ── Content signals ────────────────────────────────────────
   const paragraphCount = $('p').length
-  const cleanContent = extractVisibleContent($.html())
+  const cleanContent = extractCleanContent($.html())
   const wordCount = recalculateWordCount(cleanContent)
   const hasCTA = ['buy','order','subscribe','sign up','get started','contact','book','demo','try','download','shop now','learn more','get a quote'].some(kw => bodyText.includes(kw))
   const hasPhoneNumber = /(\+?\d[\d\s\-().]{7,}\d)/.test($('body').text())
@@ -301,11 +350,15 @@ function scoreTechnical(techData, pageSpeedData) {
 }
 
 // ─── STEP 7: Content Audit ─────────────────────────────────────────────────
-function auditContent(html, topKeywords) {
+function auditContent(html, topKeywords, cleanContent, wordCount) {
   const $ = cheerio.load(html);
 
-  const cleanContent = extractVisibleContent(html);
-  const wordCount = recalculateWordCount(cleanContent);
+  // Use pre-calculated clean content from performFastAudit
+  // cleanContent is the result of extractCleanContent() - stripped of scripts, styles, JSON-LD
+  if (!cleanContent || !wordCount) {
+    cleanContent = extractCleanContent(html);
+    wordCount = recalculateWordCount(cleanContent);
+  }
 
   const bodyText = $('body').text().toLowerCase();
   const ctaKeywords = ['buy', 'order', 'subscribe', 'sign up', 'get started', 'contact', 'book', 'demo', 'try', 'download', 'shop now', 'learn more', 'get a quote'];
@@ -370,7 +423,7 @@ function scoreContent(contentData) {
 
 // ─── STEP 9: Social Audit (Phase 4: Puppeteer DOM verification) ──────────
 function auditSocial(instagram, facebook, html, usedPuppeteer = false) {
-  return verifySocialLinks(html, instagram, facebook, usedPuppeteer)
+  return verifySocialLinksDOM(html, instagram, facebook, usedPuppeteer)
 }
 
 // ─── Score Social (Phase 4: enhanced with extra platform bonus) ──────────
@@ -944,6 +997,7 @@ function injectPageSpeedIssues(issues, pageSpeedData) {
 
 // Helper: fast audit (scrape + score + issues — no crawl, no AI)
 async function performFastAudit(url, instagram, facebook) {
+  console.log(`[AUDIT] 1. Starting scrape for: ${url}`);
   const fetchResult = await fetchPageSafe(url);
   if (!fetchResult) {
     const err = new Error('Failed to fetch the provided URL. The site may be down or blocking automated access.');
@@ -951,25 +1005,39 @@ async function performFastAudit(url, instagram, facebook) {
     throw err;
   }
   const { html, usedPuppeteer } = fetchResult;
+  console.log(`[AUDIT] 1. Scrape complete (${html.length} bytes, Puppeteer: ${usedPuppeteer})`);
 
-  // Extract keywords once, pass to both audit functions
+  // Clean room extraction: hard-strip JSON-LD, scripts, styles from content
+  console.log('[AUDIT] 2. Extracting clean content...');
+  const cleanContent = extractCleanContent(html);
+  const wordCount = recalculateWordCount(cleanContent);
+  console.log(`[AUDIT] 2. Clean content extracted (${wordCount} words)`);
+
+  // Extract keywords once, pass to both audit functions (now async with TF-IDF)
+  console.log('[AUDIT] 3. Calculating TF-IDF keywords...');
   const $kw = cheerio.load(html)
-  const topKeywords = extractKeywords($kw, html)
+  const topKeywords = await extractKeywords($kw, html, [])
+  console.log(`[AUDIT] 3. TF-IDF complete - Top keywords: ${topKeywords.slice(0, 3).map(k => k.word).join(', ')}`);
 
   // Phase 3: Fetch PageSpeed in parallel with other audits
+  console.log('[AUDIT] 4. Running parallel audits (SEO, Technical, Content, PageSpeed)...');
   const [seoData, techData, contentData, pageSpeedData] = await Promise.all([
     Promise.resolve(auditSEO(html, url, topKeywords)),
     Promise.resolve(auditTechnical(html, url)),
-    Promise.resolve(auditContent(html, topKeywords)),
+    Promise.resolve(auditContent(html, topKeywords, cleanContent, wordCount)),
     getPageSpeedData(url).catch(() => null),
   ]);
+  console.log(`[AUDIT] 4. Audits complete - SEO: ${seoData.score || 'pending'}, Technical: ${techData.score || 'pending'}, Content: ${contentData.score || 'pending'}`);
 
-  const socialData = auditSocial(instagram, facebook, html, usedPuppeteer);
+  // Use DOM-based social verification with Puppeteer flag
+  console.log('[AUDIT] 5. Verifying social links...');
+  const socialData = verifySocialLinksDOM(html, instagram, facebook, usedPuppeteer);
+  console.log(`[AUDIT] 5. Social verification complete (${socialData.socialLinksOnPage?.length || 0} links found)`);
 
   const seoScore = scoreSEO(seoData);
   const technicalScore = scoreTechnical(techData, pageSpeedData);
   const contentScore = scoreContent(contentData);
-  const socialScore = scoreSocial(socialData);
+  const socialScore = scoreSocialEnhanced(socialData);
 
   const overallScore = Math.round(
     technicalScore * 0.4 +
@@ -978,15 +1046,17 @@ async function performFastAudit(url, instagram, facebook) {
     socialScore * 0.1
   );
 
+  console.log('[AUDIT] 6. Triage issues...');
   const issues = triageIssues(seoData, techData, contentData, socialData);
   const allIssues = injectPageSpeedIssues(issues, pageSpeedData);
+  console.log(`[AUDIT] 6. Issue triage complete (${allIssues.length} issues found)`);
 
   const result = {
     url,
     timestamp: new Date().toISOString(),
     seo: { ...seoData, score: seoScore },
     technical: { ...techData, score: technicalScore },
-    content: { ...contentData, score: contentScore },
+    content: { ...contentData, score: contentScore, cleanWordCount: wordCount },
     social: { ...socialData, score: socialScore },
     overallScore,
     issues: allIssues,
@@ -996,20 +1066,34 @@ async function performFastAudit(url, instagram, facebook) {
     result._pageSpeedWarning = 'PageSpeed Insights data unavailable. Technical score based on heuristics only.';
   }
 
+  console.log(`[AUDIT] ✓ Fast audit complete - Overall score: ${overallScore}`);
   return result;
 }
 
 // Helper: deep audit (crawl + AI recommendations — requires html context from fast)
 async function performDeepAudit(url, html, fastResult) {
-  const [recommendations, crawlData] = await Promise.all([
+  console.log('[AUDIT] === Deep Audit: Starting crawl + AI recommendations ===');
+  const [recommendationsResult, crawlData] = await Promise.all([
     generateRecommendations({ ...fastResult, html }),
     crawlSite(url, html),
   ]);
+  console.log('[AUDIT] === Deep Audit: Crawl + AI complete ===');
 
-  return {
-    recommendations,
+  // Handle graceful degradation from AI timeout
+  const result = {
     crawl: crawlData,
   };
+
+  if (recommendationsResult && recommendationsResult._timeout) {
+    // AI timed out but returned fallback recommendations
+    result.recommendations = recommendationsResult.recommendations;
+    result._aiWarning = recommendationsResult._warning;
+    console.log('[AUDIT] WARNING: AI timed out, using fallback recommendations');
+  } else {
+    result.recommendations = recommendationsResult;
+  }
+
+  return result;
 }
 
 // POST /api/audit/fast — Scrape, score, and triage (under 10s)
@@ -1065,6 +1149,7 @@ router.post('/audit/deep', async (req, res) => {
 // POST /api/audit — Original combined endpoint (backwards compatible)
 router.post('/audit', async (req, res) => {
   const { url, instagram = '', facebook = '' } = req.body;
+  console.log(`[AUDIT] === Deep Audit Started for: ${url} ===`);
 
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
@@ -1074,25 +1159,33 @@ router.post('/audit', async (req, res) => {
   }
 
   try {
+    console.log('[AUDIT] 1. Starting deep scrape...');
     const fetchResult = await fetchPageSafe(url);
     if (!fetchResult) {
       return res.status(502).json({ error: 'Failed to fetch the provided URL. The site may be down or blocking automated access.' });
     }
     const { html, usedPuppeteer } = fetchResult;
+    console.log(`[AUDIT] 1. Scrape complete (${html.length} bytes)`);
 
     // Extract keywords once, pass to both audit functions
+    console.log('[AUDIT] 2. Calculating TF-IDF keywords...');
     const $kw = cheerio.load(html)
-    const topKeywords = extractKeywords($kw, html)
+    const topKeywords = await extractKeywords($kw, html)
+    console.log(`[AUDIT] 2. TF-IDF complete - Top keywords: ${topKeywords.slice(0, 3).map(k => k.word).join(', ')}`);
 
     // Phase 3: Run PageSpeed in parallel with other audits
+    console.log('[AUDIT] 3. Running parallel audits (SEO, Technical, Content, PageSpeed)...');
     const [seoData, techData, contentData, pageSpeedData] = await Promise.all([
       Promise.resolve(auditSEO(html, url, topKeywords)),
       Promise.resolve(auditTechnical(html, url)),
       Promise.resolve(auditContent(html, topKeywords)),
       getPageSpeedData(url).catch(() => null),
     ]);
+    console.log('[AUDIT] 3. Audits complete');
 
+    console.log('[AUDIT] 4. Verifying social links...');
     const socialData = auditSocial(instagram, facebook, html, usedPuppeteer);
+    console.log('[AUDIT] 4. Social verification complete');
 
     const seoScore = scoreSEO(seoData);
     // Phase 3: PageSpeed data now feeds directly into technical pillar scoring
@@ -1118,16 +1211,27 @@ router.post('/audit', async (req, res) => {
       overallScore: overallScore,
     };
 
-    const [recommendations, crawlData] = await Promise.all([
+    console.log('[AUDIT] 5. Running parallel: AI recommendations + Site crawl...');
+    const [recommendationsResult, crawlData] = await Promise.all([
       generateRecommendations({ ...result, html, pageSpeed: pageSpeedData }),
       crawlSite(url, html),
     ]);
+    console.log('[AUDIT] 5. AI recommendations and crawl complete');
 
+    console.log('[AUDIT] 6. Triaging issues...');
     const issues = triageIssues(seoData, techData, contentData, socialData);
     // Phase 3: Inject PageSpeed issues server-side
     const allIssues = injectPageSpeedIssues(issues, pageSpeedData);
+    console.log(`[AUDIT] 6. Issue triage complete (${allIssues.length} issues found)`);
 
-    result.recommendations = recommendations;
+    // Handle graceful degradation from AI timeout
+    if (recommendationsResult && recommendationsResult._timeout) {
+      result.recommendations = recommendationsResult.recommendations;
+      result._aiWarning = recommendationsResult._warning;
+      console.log('[AUDIT] WARNING: AI recommendations timed out, using fallback');
+    } else {
+      result.recommendations = recommendationsResult;
+    }
     result.issues = allIssues;
     result.crawl = crawlData;
     // Phase 3: Include PageSpeed data in response so frontend can display it
@@ -1136,6 +1240,7 @@ router.post('/audit', async (req, res) => {
       result._pageSpeedWarning = 'PageSpeed Insights data unavailable. The audit is still valid, but performance scores are based on heuristics only.';
     }
 
+    console.log(`[AUDIT] ✓ Deep audit complete - Overall score: ${overallScore}`);
     return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: err.message });
