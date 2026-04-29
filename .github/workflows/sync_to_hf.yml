@@ -16,4 +16,4 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force https://charichiiaymen:$HF_TOKEN@huggingface.co/spaces/charichiiaymen/auditiq-backend main
+          git push --force https://charichiiaymen:$HF_TOKEN@huggingface.co/spaces/charichiiaymen/auditiq-backend-v2 main
